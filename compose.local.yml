@@ -1,0 +1,12 @@
+# Use together with docker-compose.yml; never pulls upstream application images.
+services:
+  api:
+    image: opengym-api:local
+    pull_policy: build
+    ports:
+      - "127.0.0.1:3000:3000"
+  web:
+    image: opengym-web:local
+    pull_policy: build
+    ports: !override
+      - "127.0.0.1:8080:80"

@@ -1,0 +1,136 @@
+name: Fork CI and GHCR
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  # Manual validation never publishes; publishing requires a push to main.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    if: github.repository == 'illya228666/openGym'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            api/package-lock.json
+            frontend/package-lock.json
+            mcp/package-lock.json
+      - run: npm ci
+      - run: npm ci --omit=optional
+        working-directory: api
+      - run: npm ci --ignore-scripts
+        working-directory: frontend
+      - run: npm ci
+        working-directory: mcp
+      - run: npm test
+        working-directory: api
+      - run: npm test
+        working-directory: frontend
+      - run: npm test
+        working-directory: mcp
+      - run: npm run build
+        working-directory: frontend
+      - run: node scripts/check-locales.mjs
+        working-directory: frontend
+      - run: node scripts/check-source-strings.mjs
+        working-directory: frontend
+      - run: npm run test:fatigue-probe
+        working-directory: frontend
+      - run: npm run check:node-loadable
+        working-directory: mcp
+      - run: node api/scripts/check-core-loadable.mjs
+      - run: node scripts/build-coach-assets.mjs --check
+      - run: node scripts/build-api-docs.mjs --check
+
+  images:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build API (default target)
+        uses: docker/build-push-action@v7
+        with:
+          context: ./api
+          file: ./api/Dockerfile
+          target: default
+          load: true
+          tags: opengym-api:ci
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+          labels: org.opencontainers.image.source=https://github.com/illya228666/openGym
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=main-${{ github.sha }}
+      - name: Build Web (root context includes api/coach/core)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./web/Dockerfile
+          load: true
+          tags: opengym-web:ci
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+          labels: org.opencontainers.image.source=https://github.com/illya228666/openGym
+          build-args: |
+            APP_BUILD=${{ github.sha }}
+            VCS_REF=${{ github.sha }}
+            VERSION=main-${{ github.sha }}
+      - name: Boot both images and check nginx to API
+        run: |
+          docker network create opengym-ci
+          docker run -d --name api --network opengym-ci -e DATA_DIR=/data opengym-api:ci
+          docker run -d --name web --network opengym-ci -p 127.0.0.1:8080:80 opengym-web:ci
+          curl --retry 30 --retry-delay 1 --retry-all-errors --fail http://localhost:8080/api/health
+          curl --fail http://localhost:8080/api/config
+          curl --fail http://localhost:8080/ > /tmp/opengym.html
+          grep -q 'type="module"' /tmp/opengym.html
+      - name: Container diagnostics
+        if: failure()
+        run: |
+          docker logs api || true
+          docker logs web || true
+      - name: Log in to GHCR (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the images that passed smoke checks (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          for image in api web; do
+            remote="ghcr.io/illya228666/opengym-$image"
+            docker tag "opengym-$image:ci" "$remote:sha-$SHA"
+            docker tag "opengym-$image:ci" "$remote:latest"
+            docker push "$remote:sha-$SHA"
+            docker push "$remote:latest"
+          done
+      - name: Clean up smoke containers
+        if: always()
+        run: |
+          docker rm -f web api || true
+          docker network rm opengym-ci || true

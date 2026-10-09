@@ -1,0 +1,11 @@
+node_modules
+test
+.env
+.env.*
+data
+coach-auth
+*.log
+*.pem
+*.key
+*.pfx
+*.p12

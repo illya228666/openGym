@@ -7,6 +7,14 @@ data/
 
 # Local config
 .env
+.env.*
+!.env.example
+coach-auth/
+.local/
+*.pem
+*.key
+*.pfx
+*.p12
 
 # Build output / deps
 frontend/dist/
