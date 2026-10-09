@@ -1,0 +1,4 @@
+# Shell scripts and generated-file comparisons require LF on Windows too.
+* text=auto eol=lf
+# This generated Windows launcher is stored as CRLF upstream.
+frontend/android/gradlew.bat -text

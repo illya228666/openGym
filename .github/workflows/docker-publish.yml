@@ -23,6 +23,8 @@ permissions:
 
 jobs:
   build:
+    # The fork uses ci.yml, which publishes only after tests and container smoke checks.
+    if: github.repository == 'DuarteSantos8/openGym'
     runs-on: ubuntu-latest
     strategy:
       matrix:

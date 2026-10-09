@@ -3,5 +3,14 @@ frontend/dist
 media
 data
 .env
+.env.*
+**/.env
+**/.env.*
+coach-auth
+.local
+**/*.pem
+**/*.key
+**/*.pfx
+**/*.p12
 .git
 *.log
