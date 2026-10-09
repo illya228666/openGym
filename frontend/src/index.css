@@ -1804,10 +1804,19 @@ body.no-tabbar.resting #toast{bottom:calc(100px + var(--sab))}
 }
 
 /* --------------------------------------------------- desktop (≥1000px) --- */
+/* Mounted directly under body, outside animated route/scroll containers. */
 .home-mascot{
-  position:fixed;z-index:2;right:max(8px,calc((100vw - 560px)/2 + 8px));
+  position:fixed;z-index:12;right:max(8px,calc((100vw - 560px)/2 + 8px));
   bottom:calc(72px + var(--sab));width:clamp(176px,42vw,220px);height:auto;
   opacity:1;pointer-events:none;filter:drop-shadow(0 4px 10px rgba(0,0,0,.34));
+}
+/* Keep Sumrak visible and above the tab bar on narrow mobile viewports. */
+@media (max-width:999px){
+  .home-mascot{
+    right:max(8px,env(safe-area-inset-right,0px));
+    bottom:calc(88px + var(--sab));
+    width:clamp(104px,34vw,156px);
+  }
 }
 .cols{display:block}
 @media (min-width:1000px){
