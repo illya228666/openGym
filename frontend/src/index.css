@@ -1813,7 +1813,7 @@ body.no-tabbar.resting #toast{bottom:calc(100px + var(--sab))}
 /* Keep Sumrak visible and above the tab bar on narrow mobile viewports. */
 @media (max-width:999px){
   .home-mascot{
-    right:max(8px,env(safe-area-inset-right,0px));
+    right:8px;
     bottom:calc(88px + var(--sab));
     width:clamp(104px,34vw,156px);
   }
