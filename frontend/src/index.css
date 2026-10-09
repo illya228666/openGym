@@ -1804,6 +1804,11 @@ body.no-tabbar.resting #toast{bottom:calc(100px + var(--sab))}
 }
 
 /* --------------------------------------------------- desktop (≥1000px) --- */
+.home-mascot{
+  position:fixed;z-index:2;right:max(8px,calc((100vw - 560px)/2 + 8px));
+  bottom:calc(72px + var(--sab));width:clamp(176px,42vw,220px);height:auto;
+  opacity:1;pointer-events:none;filter:drop-shadow(0 4px 10px rgba(0,0,0,.34));
+}
 .cols{display:block}
 @media (min-width:1000px){
   #app{max-width:1080px;padding-top:calc(var(--conn) + 32px);padding-bottom:calc(128px + var(--sab))}
