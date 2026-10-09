@@ -1805,9 +1805,16 @@ body.no-tabbar.resting #toast{bottom:calc(100px + var(--sab))}
 
 /* --------------------------------------------------- desktop (≥1000px) --- */
 .home-mascot{
-  position:fixed;z-index:2;right:max(8px,calc((100vw - 560px)/2 + 8px));
+  position:fixed;z-index:10;right:max(8px,calc((100vw - 560px)/2 + 8px));
   bottom:calc(72px + var(--sab));width:clamp(176px,42vw,220px);height:auto;
   opacity:1;pointer-events:none;filter:drop-shadow(0 4px 10px rgba(0,0,0,.34));
+}
+/* Keep Sumrak visible above the mobile tab bar, without blocking touches on the Home screen. */
+@media (max-width:599px){
+  .home-mascot{
+    right:12px;bottom:calc(100px + var(--sab));
+    width:clamp(144px,44vw,190px);
+  }
 }
 .cols{display:block}
 @media (min-width:1000px){
