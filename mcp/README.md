@@ -42,31 +42,50 @@ Remote MCP is **disabled by default**. For source use, install both packages (`n
 docker build -f api/Dockerfile .
 ```
 
-Administrators can now configure MCP in **Settings → MCP → MCP server settings**:
-enable remote MCP, set its public URL, add predefined OAuth clients and paste exact
-callback URLs. Save, then restart the API container. The page distinguishes current
-settings from saved changes pending restart; it does not restart the service for you.
-Only administrators can save; all signed-in users can copy connection details and
-inspect/revoke their own connections. The page also explains permissions, dates and
-safe Nutrition workflows. New UI copy is localized for English, Russian and German;
-other languages use the English fallback.
+1. An administrator opens **Settings → MCP** and turns on **Remote MCP**.
+2. Copy the displayed URL. On the existing deployment it is `https://gym.niichavo.pp.ua/mcp`.
+3. Add that URL as an OAuth MCP connection in ChatGPT or another compatible client. Leave manual client ID/secret fields empty; registration is automatic.
+4. Sign in to the existing OpenGym account and approve the requested permissions.
 
-GUI settings are written atomically to `data/mcp-settings.json` and override MCP
-environment defaults on the next API start. Include this file in the normal data
-backup. It contains public client configuration, never OAuth tokens or client secrets.
-The server refuses corrupt saved settings instead of silently reverting to `.env`.
+The switch is persisted atomically in `data/mcp-settings.json` and applies immediately.
+No .env edits or container restarts are needed. A fresh deployment uses its existing
+OpenGym `ORIGIN` plus `/mcp`. Existing `MCP_PUBLIC_URL`, predefined clients and version-1
+saved settings remain supported for migration; toggling never changes the issuer/resource
+identity. The GUI only exposes status, URL, owned connections and the admin switch, not
+live issuer/client editing. New UI copy targets en/ru/de with English fallback elsewhere.
 
-Without saved GUI configuration, the existing deployment's `.env` bootstraps MCP:
+Both automatic registration mechanisms use the existing `oidc-provider`:
 
-```dotenv
-ORIGIN=https://gym.example.com
-MCP_ENABLED=1
-MCP_PUBLIC_URL=https://gym.example.com/mcp
-MCP_OAUTH_CLIENTS=[{"client_id":"opengym-chatgpt","client_name":"ChatGPT","redirect_uris":["https://chatgpt.com/connector/oauth/REPLACE_WITH_YOUR_CALLBACK_ID"]}]
-TZ=Europe/Berlin
-```
+- **CIMD:** discovery advertises `client_id_metadata_document_supported: true`. The
+  HTTPS document URL is the client ID; its identity, name and exact redirects are validated.
+  ChatGPT's plural `token_endpoint_auth_methods_supported` is negotiated against the
+  server's `none` method, regardless of a legacy `private_key_jwt` preference.
+  Unneeded JWKS are not fetched.
+- **DCR:** `registration_endpoint` points to `/oauth/reg`. Registration returns a
+  durable random ID with no secret or registration-management token. It does not grant
+  account access. Public authorization-code/refresh clients only; PKCE S256 stays mandatory.
 
-The callback above is a placeholder. In ChatGPT's private plugin/custom MCP connection settings, choose OAuth with a predefined public client, enter the configured `client_id`, leave the client secret empty, and copy **the exact callback shown by that client** into `redirect_uris`. If authentication method selection is available, use `none`. Restart API after changing clients. Use only trusted exact callbacks, no wildcards. Other OAuth-capable MCP clients can have separate predefined IDs. This private-first release has no dynamic client registration (DCR) or client metadata document fetching (CIMD).
+This follows the [MCP authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
+and [OpenAI client registration guidance](https://developers.openai.com/plugins/build/auth#client-registration).
+CIMD is preferred by current ChatGPT when selected/available, DCR supports other clients.
+Clients supporting neither still require legacy pre-registration. Custom MCP availability
+also depends on the ChatGPT account/workspace.
+
+CIMD permits HTTPS port 443, a non-root path, no credentials/fragment, valid TLS and
+public DNS only. Literal IP document IDs, LAN/loopback/reserved DNS targets, redirects,
+non-JSON, malformed/mismatched documents and bodies above 32 KiB fail closed.
+The address check runs in the actual socket lookup, preventing DNS rebinding; mixed
+public/private answers are rejected. A request deadline is 3 seconds. At most 20 uncached
+fetches/minute globally; provider caching is bounded to 30 seconds–one hour.
+DCR allows 5 attempts/minute per source, 60/hour globally and 1000 durable clients.
+Excess returns 429 instead of deleting working credentials; there is no automatic client
+expiration. These private-instance limits are intentionally not unlimited public onboarding.
+
+HTTPS callbacks are matched exactly; local clients may use loopback HTTP (native-client
+port handling follows the provider's RFC8252 policy). Wildcards, fragments, credentials,
+private non-loopback literal callbacks and metadata causing unrelated sector/key/request
+fetches are rejected. Client display names are not proof of publisher trust: review the
+client ID, callback and requested permissions on OpenGym's consent page.
 
 Connect to `MCP_PUBLIC_URL`, sign in to OpenGym with the existing login, then approve requested scopes. An already signed-in browser still gets explicit consent. When not signed in, the page links to OpenGym in another tab; reload consent after signing in. No app password or browser token is sent to ChatGPT.
 
@@ -89,8 +108,10 @@ Use the normal OpenGym authenticated API:
 
 **Settings → MCP → Your MCP connections** lists owned grants and asks for confirmation
 before revoking one. The management endpoints remain available while remote MCP is
-disabled. Disabling removes remote entrances only after API restart and does not erase
-grants; revoke separately if they must remain invalid after re-enabling. **Sign out all
+disabled. Disabling blocks new MCP/OAuth requests immediately but preserves grants.
+Already admitted requests can finish, including their narrowly bound Nutrition delegation.
+Re-enabling reuses the same provider/store/keys and valid grants, without replacing ordinary
+HTTP sessions. Revoke separately if access must stay invalid after re-enabling. **Sign out all
 devices** is still the account-wide revoke option.
 
 ## Tools

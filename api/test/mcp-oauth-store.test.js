@@ -5,6 +5,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { createOAuthStore } from '../mcp-oauth-store.js';
 
+test('registered OAuth clients remain durable beyond grant expiry', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'gym-oauth-client-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'oauth.json');
+  const store = createOAuthStore(file, 'secret');
+  await new store.Adapter('Client').upsert('client', { client_id: 'client', redirect_uris: ['https://client.example/callback'] });
+  const now = Date.now(); t.mock.method(Date, 'now', () => now + 31 * 86400000);
+  const restarted = createOAuthStore(file, 'secret');
+  assert.equal((await new restarted.Adapter('Client').find('client')).client_id, 'client');
+});
+
 test('OAuth artifacts survive restart encrypted and revoke as one grant', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'gym-oauth-store-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

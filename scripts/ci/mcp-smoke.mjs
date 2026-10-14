@@ -7,11 +7,31 @@ const target = new URL(base)
 assert.ok(process.argv.includes('--disposable') && target.protocol === 'http:' &&
   ['localhost', '127.0.0.1'].includes(target.hostname), 'Explicit --disposable and a loopback HTTP stack are required')
 const call = (path, options = {}) => fetch(base + path, { ...options, redirect: 'manual', signal: AbortSignal.timeout(15000) })
+// The disposable stack creates its administrator first (before Nutrition account smoke).
+const adminName = 'MCP admin ' + crypto.randomUUID().slice(0, 8)
+const password = 'MCP River stone garden 734!'
+const registerAccount = async name => {
+  const result = await call('/api/register/password', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base },
+    body: JSON.stringify({ name, password }) })
+  assert.equal(result.status, 200)
+  return result.headers.getSetCookie()[0].split(';')[0]
+}
+const adminCookie = await registerAccount(adminName)
+assert.equal((await (await call('/api/me', { headers: { Cookie: adminCookie } })).json()).user.admin, true)
+const toggle = async enabled => {
+  const result = await call('/api/mcp/settings', { method: 'PUT', headers: { Cookie: adminCookie, Origin: base, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }) })
+  assert.equal(result.status, 200)
+  assert.equal((await result.json()).enabled, enabled)
+}
+assert.equal((await call('/mcp')).status, 404)
+await toggle(true)
 const name = 'MCP CI ' + crypto.randomUUID().slice(0, 8)
-const signup = await call('/api/register/password', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base },
-  body: JSON.stringify({ name, password: 'MCP River stone garden 734!' }) })
-assert.equal(signup.status, 200)
-const cookie = signup.headers.getSetCookie()[0].split(';')[0]
+let cookie = await registerAccount(name)
+// Exercise existing OpenGym password sign-in, not a manufactured session.
+const login = await call('/api/login/password', { method: 'POST', headers: { Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, password }) })
+assert.equal(login.status, 200)
+cookie = login.headers.getSetCookie()[0].split(';')[0]
 const jar = new Map([cookie.split('=')])
 const browser = async (path, options = {}) => {
   const response = await call(path, { ...options, headers: { ...options.headers, Cookie: [...jar].map(([key, value]) => `${key}=${value}`).join('; ') } })
@@ -24,8 +44,14 @@ const browser = async (path, options = {}) => {
 const verifier = crypto.randomBytes(32).toString('base64url')
 const resource = (await (await call('/.well-known/oauth-protected-resource')).json()).resource
 const metadata = await (await call('/.well-known/oauth-authorization-server')).json()
+assert.equal(metadata.client_id_metadata_document_supported, true)
+const registration = await call(new URL(metadata.registration_endpoint).pathname, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ client_name: 'CI automatic MCP', redirect_uris: ['https://client.example/callback'], token_endpoint_auth_method: 'none' }) })
+assert.equal(registration.status, 201)
+const client = await registration.json()
+assert.equal(client.client_secret, undefined)
 let response = await browser(new URL(metadata.authorization_endpoint).pathname + '?' + new URLSearchParams({
-  client_id: 'mcp-ci', redirect_uri: 'https://client.example/callback', response_type: 'code', resource,
+  client_id: client.client_id, redirect_uri: 'https://client.example/callback', response_type: 'code', resource,
   scope: 'training.read nutrition.read nutrition.write offline_access', prompt: 'consent', state: 'ci-state',
   code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256'
 }))
@@ -53,7 +79,7 @@ for (let step = 0; step < 12; step++) {
 assert.ok(code)
 const exchange = await call(new URL(metadata.token_endpoint).pathname, { method: 'POST',
   headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({
-    client_id: 'mcp-ci', grant_type: 'authorization_code', code, code_verifier: verifier,
+    client_id: client.client_id, grant_type: 'authorization_code', code, code_verifier: verifier,
     redirect_uri: 'https://client.example/callback', resource
   }) })
 assert.equal(exchange.status, 200)
@@ -71,6 +97,12 @@ const tool = async (name, args, error) => {
   if (error) assert.equal(envelope.result.structuredContent.code, error)
   return envelope.result.structuredContent
 }
+assert.equal((await rpc('tools/list', {})).result.tools.length, 16)
+await toggle(false)
+await rpc('tools/list', {}, 404)
+assert.equal((await call('/oauth/token')).status, 404)
+assert.equal((await call('/api/me', { headers: { Cookie: cookie } })).status, 200)
+await toggle(true)
 assert.equal((await rpc('tools/list', {})).result.tools.length, 16)
 const productResponse = await call('/api/nutrition/products', { method: 'POST', headers: {
   Cookie: cookie, Origin: base, 'Content-Type': 'application/json'
@@ -91,6 +123,17 @@ assert.equal(changed.nutrition.calories, 300)
 await tool('nutrition_delete_entry', { entry_id: entry.entry_id, confirmed: true })
 await tool('nutrition_create_entry', entry, 'entry_deleted')
 assert.equal((await tool('nutrition_get_diary', { date: entry.date })).entries.length, 0)
+const connectionsResponse = await call('/api/mcp/connections', { headers: { Cookie: cookie } })
+assert.equal(connectionsResponse.status, 200)
+const connections = await connectionsResponse.json()
+assert.equal(connections.connections.length, 1)
+await toggle(false)
+const revoke = await call('/api/mcp/connections/revoke', { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ grantId: connections.connections[0].grantId }) })
+assert.equal(revoke.status, 200)
+await toggle(true)
+await rpc('tools/list', {}, 401)
 await call('/api/logout/all', { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: '{}' })
 await rpc('tools/list', {}, 401)
-console.log('MCP OAuth + real Nutrition API: discovery, consent, scoped writes, retry/conflict/delete and revocation passed.')
+assert.equal((await call('/api/mcp/connections', { headers: { Cookie: cookie } })).status, 401)
+console.log('MCP OAuth + real Nutrition API: live toggle, automatic DCR, login/consent, scoped writes, retry/conflict/delete and revocation passed.')

@@ -3,6 +3,8 @@ import path from 'node:path';
 import Provider, { errors } from 'oidc-provider';
 import { createOAuthStore } from './mcp-oauth-store.js';
 import { McpScopes, validateMcpConfiguration } from './mcp-config.js';
+import { createMetadataFetch, metadataUrl, validateClientMetadata, MaxDynamicClients } from './mcp-clients.js';
+import { createWindow } from './rate-limit.js';
 
 export { McpScopes } from './mcp-config.js';
 const GrantLifetimeSeconds = 30 * 86400;
@@ -10,8 +12,9 @@ const InternalCredentialSeconds = 60;
 const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
 
 /** OAuth protocol belongs to oidc-provider; OpenGym supplies login, consent and account status. */
-export function createMcpOAuth({ data, secret, origin, publicUrl, clients, userById, readSession, json }) {
-  const configuration = validateMcpConfiguration({ enabled: true, url: publicUrl || origin + '/mcp', clients }, origin);
+export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], userById, readSession, json, store: existingStore,
+  metadataFetch = createMetadataFetch() }) {
+  const configuration = validateMcpConfiguration({ enabled: false, url: publicUrl || origin + '/mcp', clients }, origin);
   const resource = new URL(configuration.url);
   clients = configuration.clients;
   const prefix = resource.pathname.slice(0, -'/mcp'.length);
@@ -21,7 +24,8 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients, userB
     const user = userById(binding.userId);
     return !!user && !user.disabled && sessionVersion(user) === binding.sessionVersion;
   };
-  const store = createOAuthStore(path.join(data, 'mcp-oauth.json'), secret, active);
+  const store = existingStore || createOAuthStore(path.join(data, 'mcp-oauth.json'), secret, active);
+  const fetchBudget = createWindow({ max: 20, windowMs: 60000 });
   let keys = store.get('OpenGymKeys', 'signing');
   if (!keys) {
     const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -33,9 +37,29 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients, userB
     clients: clients.map(client => ({ client_id: client.client_id, client_name: client.client_name || client.client_id,
       redirect_uris: client.redirect_uris, response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'],
       token_endpoint_auth_method: 'none' })), clientAuthMethods: ['none'],
+    clientDefaults: { token_endpoint_auth_method: 'none', response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'] },
+    fetch: metadataFetch,
+    extraClientMetadata: { properties: ['opengym_policy'], validator: (ctx, _key, _value, metadata) => {
+      if (ctx?.oidc?.body && ctx.method === 'POST' && ctx.path.endsWith('/reg')) validateClientMetadata(ctx.oidc.body);
+      validateClientMetadata(metadata);
+      // Resource scopes are consented at the resource server, not globally granted OIDC scopes.
+      if (metadata.scope !== undefined) {
+        if (typeof metadata.scope !== 'string' || metadata.scope.length > 512) throw new errors.InvalidClientMetadata('invalid scope');
+        const scopes = String(metadata.scope).split(' ').filter(Boolean);
+        if (scopes.some(scope => !['openid', 'offline_access', ...McpScopes].includes(scope)))
+          throw new errors.InvalidClientMetadata('unsupported scope');
+        metadata.scope = scopes.filter(scope => ['openid', 'offline_access'].includes(scope)).join(' ');
+      }
+      delete metadata.opengym_policy;
+    } },
     cookies: { keys: [crypto.createHmac('sha256', secret).update('opengym-oauth-cookies-v1').digest('hex')] },
     pkce: { required: () => true },
     features: { devInteractions: { enabled: false }, userinfo: { enabled: false }, revocation: { enabled: true },
+      registration: { enabled: true, issueRegistrationAccessToken: false },
+      clientIdMetadataDocument: { enabled: true, ack: 'draft-02',
+        allowFetch: (_ctx, id) => !!metadataUrl(id) && !fetchBudget.take('global'),
+        allowClient: (_ctx, client) => { validateClientMetadata(client.metadata(), true); return true; },
+        cacheDuration: { min: 30, max: 3600 } },
       resourceIndicators: { enabled: true, defaultResource: () => resource.href, useGrantedResource: () => true,
         getResourceServerInfo: (_ctx, requested) => {
           if (requested !== resource.href) throw new errors.InvalidTarget();
@@ -60,6 +84,7 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients, userB
   });
   provider.proxy = true;
   provider.on('server_error', (_ctx, error) => console.error('OAuth server error', error.code || error.name, error.syscall || ''));
+  const registrationBudget = createWindow({ max: 60, windowMs: 3600000 });
   const callback = provider.callback();
   async function verify(token, scope) {
     const access = await provider.AccessToken.find(token);
@@ -102,6 +127,7 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients, userB
       if (req.method !== 'GET') { json(res, 405, { error: 'method_not_allowed' }); return true; }
       json(res, 200, { issuer, authorization_endpoint: issuer + '/auth', token_endpoint: issuer + '/token',
         jwks_uri: issuer + '/jwks', revocation_endpoint: issuer + '/token/revocation',
+        client_id_metadata_document_supported: true, registration_endpoint: issuer + '/reg',
         response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'],
         token_endpoint_auth_methods_supported: ['none'], code_challenge_methods_supported: ['S256'],
         authorization_response_iss_parameter_supported: true, scopes_supported: ['openid', 'offline_access', ...McpScopes] }); return true;
@@ -115,6 +141,11 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients, userB
     req.headers['x-forwarded-proto'] = resource.protocol.slice(0, -1);
     req.headers['x-forwarded-host'] = resource.host;
     req.originalUrl = prefix + req.url;
+    if (pathname === '/oauth/reg' && req.method === 'POST') {
+      if (registrationBudget.take('global') || store.list('Client').length >= MaxDynamicClients) {
+        json(res, 429, { error: 'registration_limit' }, { 'Retry-After': '3600' }); return true;
+      }
+    }
     if (interactionPath) {
       const details = await provider.interactionDetails(req, res);
       if (interactionPath[1] !== details.uid) { json(res, 400, { error: 'invalid_interaction' }); return true; }
@@ -147,7 +178,8 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients, userB
         grant.addResourceScope(resource.href, scopes.join(' '));
         const grantId = await grant.save();
         store.set('OpenGymGrant', grantId, { grantId, userId: user.id, sessionVersion: sessionVersion(user),
-          clientId: details.params.client_id, scopes, created: new Date().toISOString() }, GrantLifetimeSeconds);
+          clientId: details.params.client_id, clientName: (await provider.Client.find(details.params.client_id))?.clientName || details.params.client_id,
+          scopes, created: new Date().toISOString() }, GrantLifetimeSeconds);
         await provider.interactionFinished(req, res, { consent: { grantId } }, { mergeWithLastSubmission: true });
       } else json(res, 403, { error: 'account_changed_restart_authorization' });
       return true;

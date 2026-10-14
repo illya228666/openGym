@@ -35,17 +35,13 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove() })
 const mount = async () => { await act(async () => { root.render(<McpSettings />) }) }
 const button = title => [...host.querySelectorAll('button')].find(element => element.textContent.trim() === title)
-const input = (selector, text) => act(() => {
-  const element = host.querySelector(selector)
-  Object.getOwnPropertyDescriptor(element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set.call(element, text)
-  element.dispatchEvent(new Event('input', { bubbles: true }))
-})
 
 it('shows public MCP details and revokes only the confirmed owned connection', async () => {
   await mount()
   expect(host.textContent).toContain('https://gym.example/mcp')
-  expect(host.textContent).toContain('Europe/Berlin')
-  expect(host.textContent).toContain('nutrition.write')
+  expect(host.textContent).toContain('Read products, diary and nutritional totals')
+  expect(host.textContent).not.toContain('Client ID:')
+  expect(host.querySelector('[role="switch"]')).toBeNull()
   expect(host.querySelector('form')).toBeNull()
   const url = [...host.querySelectorAll('.lrow')].find(row => row.querySelector('.lrow-t')?.textContent === 'MCP URL')
   await act(async () => url.click())
@@ -59,28 +55,23 @@ it('shows public MCP details and revokes only the confirmed owned connection', a
   expect(mocks.toast).toHaveBeenCalledWith('MCP access revoked')
 })
 
-it('admin saves a complete configuration without pretending it is active before restart', async () => {
+it('admin toggles MCP immediately with no manual OAuth fields or restart', async () => {
   mocks.user = { id: 'admin', admin: true }
-  const saved = { enabled: false, url: 'https://gym.example/mcp', clients: [] }
   api.mockImplementation(async (path, options) => path === '/api/mcp/settings'
-    ? { ...settings(), enabled: false, clients: [], saved: options ? JSON.parse(options.body) : saved, restartRequired: !!options }
+    ? { ...settings(), enabled: options ? JSON.parse(options.body).enabled : false }
     : { connections: [] })
   await mount()
-  act(() => host.querySelector('[role="switch"]').click())
-  expect(api.mock.calls.filter(([, options]) => options?.method === 'PUT')).toHaveLength(0)
-  act(() => button('Add OAuth client').click())
-  input('#mcp-client-id-0', 'opengym-chatgpt')
-  input('#mcp-client-name-0', 'ChatGPT')
-  input('#mcp-callbacks-0', 'https://client.example/callback')
-  await act(async () => host.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  await act(async () => host.querySelector('[role="switch"]').click())
   const put = api.mock.calls.find(([, options]) => options?.method === 'PUT')
   expect(put[0]).toBe('/api/mcp/settings')
-  expect(JSON.parse(put[1].body)).toEqual({ enabled: true, url: 'https://gym.example/mcp', clients: [
-    { client_id: 'opengym-chatgpt', client_name: 'ChatGPT', redirect_uris: ['https://client.example/callback'] }
-  ] })
-  expect(host.textContent).toContain('Saved changes are pending. Restart the API to apply them.')
+  expect(JSON.parse(put[1].body)).toEqual({ enabled: true })
+  expect(host.querySelector('input, textarea, form')).toBeNull()
+  expect(host.textContent).not.toContain('Restart')
   const status = [...host.querySelectorAll('.lrow')].find(row => row.querySelector('.lrow-t')?.textContent === 'Remote MCP')
-  expect(status.querySelector('.lrow-v').textContent).toBe('Off')
+  expect(host.querySelector('[role="switch"]').getAttribute('aria-checked')).toBe('true')
+  expect(status.textContent).toContain('On')
+  await act(async () => host.querySelector('[role="switch"]').click())
+  expect(host.querySelector('[role="switch"]').getAttribute('aria-checked')).toBe('false')
 })
 
 it('guests and demo profiles get instructions without remote requests or admin controls', async () => {
@@ -108,17 +99,15 @@ it('load failures offer reload and failed revocation keeps the connection visibl
   expect(host.querySelector('[role="alert"]').textContent).toBe('Could not revoke access. Reload and try again.')
 })
 
-it('an admin validation error preserves the unsaved form and does not claim success', async () => {
+it('failed admin toggle keeps the confirmed state and does not claim success', async () => {
   mocks.user = { id: 'admin', admin: true }
   api.mockImplementation(async (path, options) => {
-    if (options?.method === 'PUT') throw new Error('OAuth callback must be HTTPS')
-    return path === '/api/mcp/settings' ? { ...settings(), saved: { enabled: true, url: settings().url,
-      clients: [{ ...settings().clients[0], redirect_uris: ['https://client.example/callback'] }] } } : { connections: [] }
+    if (options?.method === 'PUT') throw new Error('offline')
+    return path === '/api/mcp/settings' ? settings() : { connections: [] }
   })
   await mount()
-  input('#mcp-callbacks-0', 'http://evil.example/callback')
-  await act(async () => host.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-  expect(host.querySelector('[role="alert"]').textContent).toBe('OAuth callback must be HTTPS')
-  expect(host.querySelector('#mcp-callbacks-0').value).toBe('http://evil.example/callback')
+  await act(async () => host.querySelector('[role="switch"]').click())
+  expect(host.querySelector('[role="alert"]').textContent).toBe('Could not save MCP settings.')
+  expect(host.querySelector('[role="switch"]').getAttribute('aria-checked')).toBe('true')
   expect(mocks.toast).not.toHaveBeenCalledWith('MCP settings saved')
 })

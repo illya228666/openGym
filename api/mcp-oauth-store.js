@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { atomicWrite } from './durable.js';
+import { MaxDynamicClients } from './mcp-config.js';
 
 const MaxRecords = 10000;
 const RenameAttempts = 5;
@@ -68,7 +69,12 @@ export function createOAuthStore(file, secret, active = () => true) {
   };
   class Adapter {
     constructor(model) { this.model = model; }
-    async upsert(id, payload, expiresIn) { set(this.model, id, payload, expiresIn); }
+    // Registered clients must outlive tokens and grants, including API restarts.
+    async upsert(id, payload, expiresIn) {
+      if (this.model === 'Client' && !get('Client', id) && [...rows.keys()].filter(key => key.startsWith('Client:')).length >= MaxDynamicClients)
+        throw new Error('OAuth client capacity exceeded');
+      set(this.model, id, payload, this.model === 'Client' ? 3153600000 : expiresIn);
+    }
     async find(id) {
       const payload = get(this.model, id);
       const grantId = this.model === 'Grant' ? id : payload?.grantId;
