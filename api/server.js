@@ -34,7 +34,8 @@ import { createMediaStore, mediaLimits, mediaConfig, MediaError, HASH_RE } from 
 import { effectiveRoutineId } from './queue.js';
 import { stampPut } from './sync-stamps.js';
 import { atomicWrite as durableWrite } from './durable.js';
-import { nutritionHello, nutritionProxy, nutritionRoute } from './nutrition.js';
+import { nutritionHello, nutritionProxy, nutritionRoute, requestNutrition } from './nutrition.js';
+import { createMcpConfiguration } from './mcp-config.js';
 import { nudgeFor, nudgeWindowOpen, toneOf } from './nudge.js';
 
 const PORT = +(process.env.PORT || 3000);
@@ -1837,6 +1838,35 @@ const mediaRoutes = {
 /* ---------- routes ---------- */
 const nutritionGateway = (req, res) => nutritionProxy(req, res, { readSession, json, readBody });
 const routes = {
+  'GET /api/mcp/settings': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    json(res, 200, mcpConfiguration.status(isAdmin(user)));
+  },
+  'PUT /api/mcp/settings': async (req, res) => {
+    const user = requireAdmin(req, res); if (!user) return;
+    try { mcpConfiguration.save(await readBody(req)); }
+    catch (error) {
+      if (error.status === 400) return json(res, 400, { error: error.message });
+      throw error;
+    }
+    audit(req, 'mcp.configure', { user });
+    json(res, 200, mcpConfiguration.status(true));
+  },
+  'GET /api/mcp/connections': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    json(res, 200, { connections: await mcpConnections(user) });
+  },
+  'POST /api/mcp/connections/revoke': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const { grantId } = await readBody(req);
+    if (!(await mcpConnections(user)).some(grant => grant.grantId === grantId)) return json(res, 404, { error: 'not found' });
+    (await mcpConnectionStore()).revoke(grantId);
+    audit(req, 'mcp.revoke', { user });
+    json(res, 200, { ok: true });
+  },
   'GET /api/nutrition/products': nutritionGateway,
   'POST /api/nutrition/products': nutritionGateway,
   'GET /api/nutrition/products/{id}': nutritionGateway,
@@ -1879,6 +1909,7 @@ const routes = {
       // Public like the two flags above: the caps are not a secret, and the absence of the
       // block is how the app knows this server does not take photos and videos at all.
       ...(MEDIA_ON ? { media: mediaConfig(MEDIA_LIMITS) } : {}),
+      ...(mcpOAuth ? { mcp: { url: mcpOAuth.resource.href } } : {}),
       ...(readSession(req) ? { coach: coachConfig.publicConfig() } : {})
     });
   },
@@ -2538,6 +2569,38 @@ startWarmup();
 // hourly budget have let the upload in; from there media.js's own idle timer takes over. The
 // tests shorten it, as they do REMINDER_TICK_MS.
 const BODY_TIMEOUT_MS = Math.max(50, +(process.env.BODY_TIMEOUT_MS || 300000) || 300000);
+// Optional OAuth/remote runtime; settings and own-grant management remain available while off.
+let mcpOAuth = null;
+let remoteMcp = null;
+let mcpStore = null;
+const mcpConfiguration = createMcpConfiguration({ data: DATA, origin: ORIGIN });
+async function mcpConnectionStore() {
+  if (!mcpStore) {
+    const { createOAuthStore } = await import('./mcp-oauth-store.js');
+    // Reuse the provider's store while running; disabled MCP still permits own-grant revocation.
+    if (!mcpStore) mcpStore = mcpOAuth?.store || createOAuthStore(path.join(DATA, 'mcp-oauth.json'), SECRET);
+  }
+  return mcpStore;
+}
+async function mcpConnections(user) {
+  return (await mcpConnectionStore()).list('OpenGymGrant')
+    .filter(grant => grant.userId === user.id && grant.sessionVersion === (user.sv || 0));
+}
+const mcpAuthBudget = createWindow({ max: 120, windowMs: 60000 });
+if (mcpConfiguration.effective.enabled) {
+  const { createMcpOAuth } = await import('./mcp-oauth.js');
+  const { createHttpMcp } = await import('../mcp/src/http.js');
+  mcpOAuth = createMcpOAuth({ data: DATA, secret: SECRET, origin: ORIGIN, publicUrl: mcpConfiguration.effective.url,
+    clients: mcpConfiguration.effective.clients, userById: id => db.users.find(user => user.id === id),
+    readSession, json });
+  const budget = createWindow({ max: 120, windowMs: 60000 });
+  remoteMcp = createHttpMcp({ oauth: mcpOAuth, json, requestNutrition, takeBudget: id => budget.take(id),
+    readState: id => {
+      const state = readStateStrict(id);
+      if (state === UNREADABLE) throw Object.assign(new Error('Training state unreadable'), { code: 'state_unreadable', status: 503 });
+      return state;
+    } });
+}
 function bodyDeadline(req) {
   if (req.complete) return;
   // The socket itself, not req: a route that answered without reading the body has finished its
@@ -2583,6 +2646,25 @@ const server = http.createServer(async (req, res) => {
   try { url = new URL(req.url, 'http://x'); }
   catch { return json(res, 400, { error: 'bad request' }); }
   let key = req.method + ' ' + url.pathname;
+  if (remoteMcp) {
+    try {
+      if (url.pathname.startsWith('/oauth/') && !url.pathname.startsWith('/oauth/.well-known/')) {
+        const retryAfter = mcpAuthBudget.take(limitAddress(req));
+        if (retryAfter) return json(res, 429, { error: 'rate_limited' }, { 'Retry-After': String(retryAfter) });
+      }
+      if (url.pathname === '/mcp') { await remoteMcp.handle(req, res); return; }
+      if (url.pathname === '/api/mcp/nutrition/identity' && req.method === 'GET') {
+        const identity = mcpOAuth.nutritionIdentity((req.headers.authorization || '').replace(/^Bearer /, ''));
+        return json(res, identity ? 200 : 401, identity || { error: 'invalid delegation' });
+      }
+      if (await mcpOAuth.handle(req, res, url.pathname)) return;
+    } catch (error) {
+      console.error('mcp request failed:', error.code || error.name, error.syscall || '');
+      if (!res.headersSent) json(res, error.status || 503,
+        { error: error.status && error.status < 500 ? 'invalid_mcp_request' : 'mcp_unavailable' });
+      return;
+    }
+  }
   // The one route with a parameter in its path. Mapped onto its template key here so the table
   // above stays a plain lookup, and so csrfOk and the catch-all see one name for every file.
   const mm = /^\/api\/media\/([0-9a-f]{64})$/.exec(url.pathname);

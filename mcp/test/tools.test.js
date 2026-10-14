@@ -8,6 +8,8 @@ import { EXDB } from '../../frontend/src/lib/exercises.js'
 import { _seedStateForTests } from '../src/state.js'
 import { TOOLS } from '../src/tools.js'
 import { bestSetOf } from '../../frontend/src/lib/onerm.js'
+import { InMemoryTransport } from '@modelcontextprotocol/server'
+import { createServer } from '../src/server.js'
 
 // Re-stated here so the assertions stand alone without reaching into lib internals to learn
 // the demo state's exact values.
@@ -29,6 +31,60 @@ function call(name, params = {}) {
   const h = byName[name]
   if (!h) throw new Error(`unknown tool ${name}`)
   return h(params)
+}
+
+// Exercise the actual MCP v2 tool registration without adding a test-only client SDK.
+// The transport pair forwards JSON-RPC envelopes in memory, including invalid-param errors.
+async function connectSdkTestClient(tools) {
+  const server = createServer(tools)
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  const pending = new Map()
+  let nextId = 0
+
+  clientTransport.onmessage = message => {
+    if (!('id' in message)) return
+    const request = pending.get(message.id)
+    if (!request) return
+    pending.delete(message.id)
+    if ('error' in message) {
+      const error = new Error(message.error.message)
+      error.code = message.error.code
+      request.reject(error)
+    } else {
+      request.resolve(message.result)
+    }
+  }
+  await Promise.all([server.connect(serverTransport), clientTransport.start()])
+
+  const request = (method, params) => new Promise((resolve, reject) => {
+    const id = ++nextId
+    pending.set(id, { resolve, reject })
+    clientTransport.send({ jsonrpc: '2.0', id, method, params }).catch(error => {
+      pending.delete(id)
+      reject(error)
+    })
+  })
+
+  try {
+    await request('initialize', {
+      protocolVersion: '2025-11-25',
+      capabilities: {},
+      clientInfo: { name: 'opengym-mcp-test', version: '1.0.0' }
+    })
+    await clientTransport.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+  } catch (error) {
+    await server.close()
+    await clientTransport.close()
+    throw error
+  }
+
+  return {
+    callTool: ({ name, arguments: args }) => request('tools/call', { name, arguments: args || {} }),
+    close: async () => {
+      await server.close()
+      await clientTransport.close()
+    }
+  }
 }
 
 function freshState() {
@@ -690,22 +746,19 @@ describe('estimate_1rm', () => {
   })
 
   test('an empty exercise_id is a validation error, not the whole PR table', async () => {
-    const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js')
-    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
-    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js')
-    const t = TOOLS.find(x => x.name === 'estimate_1rm')
-    const server = new McpServer({ name: 'opengym', version: '0.1.0' })
-    server.tool(t.name, t.description, t.schema, async p => ({ content: [{ type: 'text', text: JSON.stringify(t.handler(p || {})) }] }))
-    const client = new Client({ name: 'tools-test', version: '1' })
-    const [ct, st] = InMemoryTransport.createLinkedPair()
-    await Promise.all([server.connect(st), client.connect(ct)])
-    const r = await client.callTool({ name: 'estimate_1rm', arguments: { exercise_id: '' } }).then(
-      x => ({ ok: !x.isError, text: x.content?.[0]?.text || '' }),
-      e => ({ code: e.code, text: String(e.message) })
-    )
-    expect(r.ok).not.toBe(true)
-    expect(String(r.code ?? r.text)).toContain('-32602')
-    expect(r.text).not.toContain('pr_table')
+    const client = await connectSdkTestClient([TOOLS.find(x => x.name === 'estimate_1rm')])
+    try {
+      const r = await client.callTool({ name: 'estimate_1rm', arguments: { exercise_id: '' } }).then(
+        x => ({ ok: !x.isError, text: x.content?.[0]?.text || '' }),
+        e => ({ code: e.code, text: String(e.message) })
+      )
+      expect(r.ok).not.toBe(true)
+      if (r.code !== undefined) expect(r.code).toBe(-32602)
+      else expect(r.text).toMatch(/Input validation error/)
+      expect(r.text).not.toContain('pr_table')
+    } finally {
+      await client.close()
+    }
   })
 
   test('a heavy warm-up is never a PR — the table matches the app, which excludes warm-ups', () => {
@@ -1209,22 +1262,10 @@ describe('date arguments must be dates the calendar has', () => {
   let client
 
   beforeAll(async () => {
-    const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js')
-    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
-    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js')
-    const server = new McpServer({ name: 'opengym', version: '0.1.0' })
-    for (const t of TOOLS) {
-      server.tool(t.name, t.description, t.schema, async (params) => {
-        try {
-          return { content: [{ type: 'text', text: JSON.stringify(t.handler(params || {}), null, 2) }] }
-        } catch (err) {
-          return { isError: true, content: [{ type: 'text', text: `${err.code || 'ERROR'}: ${err.message}` }] }
-        }
-      })
-    }
-    client = new Client({ name: 'tools-test', version: '1' })
-    const [ct, st] = InMemoryTransport.createLinkedPair()
-    await Promise.all([server.connect(st), client.connect(ct)])
+    client = await connectSdkTestClient(TOOLS)
+  })
+  afterAll(async () => {
+    await client?.close()
   })
 
   const shot = (name, args) => client.callTool({ name, arguments: args }).then(
@@ -1243,10 +1284,11 @@ describe('date arguments must be dates the calendar has', () => {
     ]) {
       const r = await shot(tool, args)
       const where = `${tool} ${JSON.stringify(args)}`
-      // The SDK answers an invalid-params rejection either as a throw or as an error result
-      // carrying the same code; both are the -32602 the client sees, neither runs the handler.
+      // SDK v2 may report schema validation as a tool error instead of a JSON-RPC rejection.
+      // Both must reject invalid dates before the handler runs.
       expect(r.ok, `${where} must be refused`).not.toBe(true)
-      expect(String(r.code ?? r.text), where).toContain('-32602')
+      if (r.rejected) expect(r.code, where).toBe(-32602)
+      else expect(r.text, where).toMatch(/Input validation error/)
       expect(String(r.message ?? r.text), where).toMatch(/not a date the calendar has|must be YYYY-MM-DD/)
     }
   })
