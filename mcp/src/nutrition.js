@@ -9,21 +9,34 @@ const quantity = () => z.number().positive().max(100000).refine(value =>
   Math.abs(value * 1000 - Math.round(value * 1000)) < 0.000001, 'At most three decimal places')
 const time = () => z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional()
 
-/** Only existing Nutrition API operations; no persistence, catalog guesses or nutrient math. */
+/** Nutrition API operations only: persistence, source validation and nutrient math live in .NET. */
 export function createNutritionTools(request) {
   const tool = (name, description, schema, handler, extra = {}) => ({ name, description, schema,
     scope: extra.write ? 'nutrition.write' : 'nutrition.read', handler, ...extra })
   return [
-    tool('nutrition_search_products', 'Search your personal product catalog. Values are per 100 grams; clarify raw/cooked and brand differences. No external food database or piece weights.',
-      { search: z.string().max(200).optional(), offset: z.number().int().nonnegative().optional() },
+    tool('nutrition_search_products', 'Always search your personal catalog first. Reuse an unambiguous saved product; values are per 100 grams. Preserve brand, flavor, preparation and package variants. If absent, search Open Food Facts. Follow pagination before concluding absence or uniqueness.',
+      { search: z.string().max(200).optional(), offset: z.number().int().nonnegative().optional(),
+        brand: z.string().max(100).optional(), barcode: z.string().regex(/^[0-9]{8,14}$/).optional(),
+        externalId: z.string().regex(/^[0-9]{8,14}$/).optional(), externalSource: z.literal('openfoodfacts').optional() },
       params => request('GET', '/api/nutrition/products', params)),
+    tool('nutrition_search_external_products', 'Search Open Food Facts only after checking your personal catalog. Supply name/search, brand and/or exact barcode. Returns candidates, not verified nutrition. Different flavors, package sizes and preparation states are distinct. Ask the user when multiple plausible matches remain or details are insufficient; never select the first result or infer uniqueness from an incomplete page.',
+      { search: z.string().max(200).optional(), brand: z.string().max(100).optional(),
+        barcode: z.string().regex(/^[0-9]{8,14}$/).optional(), page: z.number().int().min(1).max(100).optional() },
+      p => request('GET', '/api/nutrition/external/products', p), { openWorld: true }),
+    tool('nutrition_get_external_product', 'Read a specific Open Food Facts candidate. Only canImport=true supplies complete checked nutrition per 100 grams and a fingerprint. OFF is community data, not guaranteed manufacturer verification. If canImport=false, explain issues and request missing information; do not invent nutrition or treat portions/100ml as grams.',
+      { external_id: z.string().regex(/^[0-9]{8,14}$/) },
+      p => request('GET', `/api/nutrition/external/products/${p.external_id}`), { openWorld: true }),
+    tool('nutrition_create_product', 'Import one unambiguously matched, verified OFF product into your personal catalog using its external ID and fingerprint from nutrition_get_external_product. Nutrition fetches and checks the source itself. No extra confirmation is needed for an unambiguous match with canImport=true. Reuses existing products, including after uncertain writes: retry with the same source/ID/fingerprint. On external_product_changed read again; product_deleted requires explicit user intent before any restoration. Then log the user-supplied grams with nutrition_create_entry.',
+      { source: z.literal('openfoodfacts'), external_id: z.string().regex(/^[0-9]{8,14}$/), fingerprint: z.string().regex(/^[0-9a-f]{64}$/) },
+      p => request('POST', '/api/nutrition/products/import', {}, { source: p.source, externalId: p.external_id, fingerprint: p.fingerprint }),
+      { write: true, idempotent: true, openWorld: true }),
     tool('nutrition_get_product', 'Read a personal product by its ID from search results.',
       { product_id: uuid() }, p => request('GET', `/api/nutrition/products/${p.product_id}`)),
     tool('nutrition_get_diary', 'Read food entries and exact totals computed by Nutrition for an explicit local calendar date.',
       { date: date() }, p => request('GET', '/api/nutrition/diary', p)),
     tool('nutrition_get_entry', 'Read one diary entry before changing or deleting it.',
       { entry_id: uuid() }, p => request('GET', `/api/nutrition/entries/${p.entry_id}`)),
-    tool('nutrition_create_entry', 'Record one confirmed product and quantity in grams. Supply a new UUID entry_id once and reuse it with the identical payload on every retry. Do not guess product, raw/cooked state, grams from pieces or a local date.',
+    tool('nutrition_create_entry', 'Record one unambiguously identified saved product and user-supplied grams, including a product just imported with nutrition_create_product; no additional confirmation is needed. Supply a new UUID entry_id once and reuse it with the identical payload on every retry. Do not guess product, raw/cooked state, grams from pieces or a local date.',
       { entry_id: uuid(), product_id: uuid(), quantity_grams: quantity(), date: date(), time: time() },
       p => request('POST', '/api/nutrition/entries', {}, { id: p.entry_id, productId: p.product_id,
         quantityGrams: p.quantity_grams, date: p.date, time: p.time ?? null }), { write: true, idempotent: true }),

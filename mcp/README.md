@@ -3,7 +3,7 @@
 Two entrances share the same tool registration and training handlers:
 
 - **Local stdio:** the original nine read-only training tools, using `OPENGYM_DATA` and `OPENGYM_UID`.
-- **Remote Streamable HTTP:** opt-in `/mcp` inside the existing Node API, with OAuth delegation and seven Nutrition API tools. No fourth image, new account system or published internal port.
+- **Remote Streamable HTTP:** opt-in `/mcp` inside the existing Node API, with OAuth delegation and ten Nutrition API tools. No fourth application image, new account system or published internal port.
 
 Training statistics still use the pure functions in `frontend/src/lib/`. Remote calls obtain the verified user's snapshot through Node's existing state reader, not an AI-supplied user ID. State is scoped to one request; custom exercise names cannot leak through a global registry. Nutrition uses its existing HTTP API, historical snapshots, decimal totals and retry rules. MCP never opens SQLite or calculates nutrients.
 
@@ -142,7 +142,10 @@ Remote-only Nutrition tools:
 
 | Tool | Input / behavior |
 |---|---|
-| `nutrition_search_products` | Optional `search`, `offset`; paginated **personal** catalog |
+| `nutrition_search_products` | Optional `search`, `offset`, `brand`, `barcode`, `externalId`, `externalSource`; paginated **personal** catalog |
+| `nutrition_search_external_products` | Name `search`, `brand`, exact `barcode`, optional `page`; OFF candidates, not verified nutrition |
+| `nutrition_get_external_product` | Exact `external_id`; checked `per100Grams`, `canImport`, `issues` and `fingerprint` |
+| `nutrition_create_product` | `source: "openfoodfacts"`, `external_id`, `fingerprint`; imports or reuses a personal product without accepting model-supplied nutrients |
 | `nutrition_get_product` | `product_id` from catalog results |
 | `nutrition_get_diary` | Explicit local `date` (`YYYY-MM-DD`); entries and service-computed totals |
 | `nutrition_get_entry` | `entry_id`; inspect before edit/delete |
@@ -151,6 +154,10 @@ Remote-only Nutrition tools:
 | `nutrition_delete_entry` | Exact `entry_id` and `confirmed: true` after confirmation |
 
 Products contain values per 100 grams, not serving/piece weights. For “I ate 200 grams of buckwheat and two eggs,” search the user's catalog, clarify raw/cooked/brand ambiguity and obtain grams for eggs. Do not invent products or piece-to-grams conversions. A fully specified “record 200 g of this product on this date” needs no redundant confirmation. Each product is a separate write, so partly successful meals must be reported as partial, not atomic.
+
+For “I ate 40 g of Milka,” search the personal catalog first. If missing, search OFF and clarify the exact flavor/package when several plausible products match. Read the selected external ID; only `canImport: true` permits automatic import. Call `nutrition_create_product` with its fingerprint, then `nutrition_create_entry` with `quantity_grams: 40`, a stable entry UUID and the known local date. Once the identity and grams are clear, no extra confirmation is needed. Next time reuse the personal product, including when OFF is unavailable. A single search hit is not proof of identity; incomplete pagination must not conceal alternatives.
+
+Imports are idempotent by authenticated user/source/external ID, including concurrent requests. Retry the same identity/fingerprint after uncertain import outcomes. `external_product_changed` requires reading the updated card; `external_product_unverified` blocks import; `product_deleted` never restores a deleted product. Existing personal edits are preserved. `external_rate_limited` includes `retryAfterSeconds`; `external_unavailable` and `external_invalid_response` do not justify invented nutrition. OFF is community data: these checks validate complete source fields, not independent manufacturer accuracy. Source URLs and attribution remain available in product responses. Data: [Open Food Facts](https://world.openfoodfacts.org), [ODbL](https://opendatacommons.org/licenses/odbl/1-0/).
 
 Generate one entry UUID before creation; retain the **identical UUID and payload** for retries. Nutrition returns the original entry for identical retries, `409 idempotency_conflict` for a different payload and `410 entry_deleted` after deletion. Timeout/network/malformed/upstream-error responses return `nutrition_unavailable`; writes include `outcome: "unknown"` and `retry_same_id: true`. Inspect the diary or retry the identical operation, never a fresh UUID. This prevents protocol retry duplicates, not a later independently generated duplicate natural-language command.
 
@@ -162,7 +169,7 @@ Existing `web → api → nutrition` remains intact. nginx proxies `/mcp` withou
 
 Reuse Cloudflare HTTPS. Do not cache dynamic routes or put interactive Access/challenge pages in front of MCP/token/discovery. Keep API/Nutrition ports internal. Cloudflare Tunnel can carry the same origin without extra origin ports. OpenAI Secure MCP Tunnel is not configured here; adding it later is a connectivity choice, not a different tool implementation.
 
-Nutrition receives a 60-second HMAC-signed internal credential bound to user, grant, session version, HTTP method and path. It revalidates with Node and compares the delegated method/path. No broad browser session is manufactured or forwarded; product-catalog writes are not MCP tools.
+Nutrition receives a 60-second HMAC-signed internal credential bound to user, grant, session version, HTTP method and path. It revalidates with Node and compares the delegated method/path. No broad browser session is manufactured or forwarded. External lookup uses `nutrition.read`; import uses `nutrition.write`. MCP does not read SQLite, and OFF receives no user credentials or identifiers.
 
 Artifacts/signing keys are stored separately in `data/mcp-oauth.json`, AES-256-GCM encrypted with a key derived from existing `data/secret`. Back up and restore **both together**; protect backups as credentials. Corruption/mismatched secret fails startup closed. Do not delete this file as a “repair”; old backups can resurrect grants and need deliberate revoke-all/session-version reset. OAuth assumes **one Node writer**, like current JSON storage; replace the adapter with transactional shared storage before multiple replicas. Expired rows are swept on writes and capacity is bounded.
 
@@ -178,7 +185,7 @@ cd ../api
 node --test test/mcp-oauth-store.test.js test/mcp-nutrition.test.js test/server-mcp.test.js test/server-nutrition.test.js
 ```
 
-CI runs Nutrition tests and `scripts/ci/mcp-smoke.mjs http://localhost:8080 --disposable` on fresh containers only. The smoke creates accounts/products and must **never** target production. Tests cover isolation, real consent/PKCE/resource/scopes, HTTPS prefixes, persistence/rotation/revocation, storage failure rollback, uncertain writes and Nutrition retry/delete rules.
+CI runs Nutrition tests and `scripts/ci/mcp-smoke.mjs http://localhost:8080 --disposable` on fresh containers only, with `scripts/ci/off-fixture.mjs` replacing only OFF via `OpenFoodFacts__BaseUrl`. The smoke creates accounts/products and must **never** target production. Tests cover isolation, real consent/PKCE/resource/scopes, HTTPS prefixes, persistence/rotation/revocation, source validation/import, concurrent reuse, read-only import denial, uncertain writes and Nutrition retry/delete rules. The fixture's nutrition is synthetic test data.
 
 References: [OpenAI OAuth integration](https://developers.openai.com/plugins/build/auth), [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [oidc-provider](https://github.com/panva/node-oidc-provider).
 

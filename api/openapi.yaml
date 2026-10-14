@@ -221,6 +221,85 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { description: Grant does not belong to the current account or is no longer active. }
+  /api/nutrition/external/products:
+    get:
+      tags: [nutrition]
+      operationId: searchExternalNutritionProducts
+      summary: Search Open Food Facts candidates by name, brand or exact barcode.
+      description: 'Check the personal catalog first. Candidates are not verified nutrition. Preserve flavors and packages; clarify multiple plausible matches. Unknown counts keep hasMore=true.'
+      parameters:
+        - { name: search, in: query, schema: { type: string, maxLength: 200 } }
+        - { name: brand, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: barcode, in: query, schema: { type: string, pattern: '^[0-9]{8,14}$' } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 1 } }
+      responses:
+        '200':
+          description: 'Candidates with source, externalId, name, brand, packageQuantity and sourceUrl; products[], hasMore, page. No automatic selection.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalNutritionProductPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { description: 'external_rate_limited; Retry-After header and retryAfterSeconds indicate when to retry.' }
+        '502': { description: 'external_invalid_response; malformed or oversized OFF response.' }
+        '503': { description: 'external_unavailable or Nutrition/authentication unavailable.' }
+  /api/nutrition/external/products/{externalId}:
+    get:
+      tags: [nutrition]
+      operationId: getExternalNutritionProduct
+      summary: Read and validate one exact OFF product and its nutrition per 100 grams.
+      parameters:
+        - { name: externalId, in: path, required: true, schema: { type: string, pattern: '^[0-9]{8,14}$' } }
+      responses:
+        '200':
+          description: 'canImport=true only for a complete non-estimated manufacturer/packaging as-sold set per 100g. Otherwise issues explain rejection and per100Grams/fingerprint are null. Community data, not guaranteed accuracy.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalNutritionProduct' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: external_product_not_found. }
+        '429': { description: external_rate_limited with retryAfterSeconds and Retry-After. }
+        '502': { description: external_invalid_response. }
+        '503': { description: external_unavailable or Nutrition/authentication unavailable. }
+  /api/nutrition/products/import:
+    post:
+      tags: [nutrition]
+      operationId: importNutritionProduct
+      summary: Import a checked OFF product or reuse its existing personal identity.
+      description: 'Requires nutrition.write over MCP. Server obtains nutrition itself. Atomic uniqueness is per user/source/externalId, including deleted rows. Existing products are returned without network access or overwrites. No client-supplied nutrient values.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source, externalId, fingerprint]
+              properties:
+                source: { type: string, enum: [openfoodfacts] }
+                externalId: { type: string, pattern: '^[0-9]{8,14}$' }
+                fingerprint: { type: string, pattern: '^[0-9a-f]{64}$' }
+      responses:
+        '200':
+          description: Reused existing product, including concurrent imports and retries.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NutritionProduct' }
+        '201':
+          description: Created product with OFF provenance.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NutritionProduct' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: external_product_not_found. }
+        '409': { description: 'external_product_changed; read and resolve the current card again.' }
+        '410': { description: 'product_deleted; imports never resurrect tombstones.' }
+        '422': { description: 'external_product_unverified; no product created.' }
+        '429': { description: external_rate_limited with retryAfterSeconds and Retry-After. }
+        '502': { description: external_invalid_response. }
+        '503': { description: external_unavailable or Nutrition/authentication/database unavailable. }
   /api/nutrition/products:
     get:
       tags: [nutrition]
@@ -229,6 +308,10 @@ paths:
       parameters:
         - { name: search, in: query, schema: { type: string, maxLength: 200 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: brand, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: barcode, in: query, schema: { type: string, pattern: '^[0-9]{8,14}$' } }
+        - { name: externalId, in: query, schema: { type: string, pattern: '^[0-9]{8,14}$' } }
+        - { name: externalSource, in: query, schema: { type: string, enum: [openfoodfacts] } }
       responses:
         '200':
           description: Successful user-scoped operation.
@@ -3393,6 +3476,43 @@ components:
           required: [id]
           properties:
             id: { type: string, format: uuid }
+            externalSource: { type: [string, 'null'], description: 'openfoodfacts for imported products; null for legacy/manual products.' }
+            externalId: { type: [string, 'null'] }
+            barcode: { type: [string, 'null'] }
+            packageQuantity: { type: [string, 'null'] }
+            sourceUrl: { type: [string, 'null'] }
+            nutritionSource: { type: [string, 'null'], description: 'manufacturer or packaging on OFF import; user after manual nutrient edits.' }
+            retrievedAtUtc: { type: [string, 'null'], format: date-time }
+            sourceFingerprint: { type: [string, 'null'] }
+    ExternalNutritionCandidate:
+      type: object
+      required: [source, externalId, name, sourceUrl]
+      properties:
+        source: { type: string, enum: [openfoodfacts] }
+        externalId: { type: string }
+        name: { type: string }
+        brand: { type: [string, 'null'] }
+        packageQuantity: { type: [string, 'null'] }
+        sourceUrl: { type: string }
+    ExternalNutritionProductPage:
+      type: object
+      required: [products, hasMore, page]
+      properties:
+        products: { type: array, items: { $ref: '#/components/schemas/ExternalNutritionCandidate' } }
+        hasMore: { type: boolean }
+        page: { type: integer }
+    ExternalNutritionProduct:
+      allOf:
+        - { $ref: '#/components/schemas/ExternalNutritionCandidate' }
+        - type: object
+          required: [canImport, issues, retrievedAtUtc]
+          properties:
+            per100Grams: { oneOf: [{ $ref: '#/components/schemas/NutritionValues' }, { type: 'null' }] }
+            nutritionSource: { type: [string, 'null'] }
+            fingerprint: { type: [string, 'null'] }
+            retrievedAtUtc: { type: string, format: date-time }
+            canImport: { type: boolean }
+            issues: { type: array, items: { type: string } }
     NutritionProductPage:
       type: object
       required: [products, hasMore]

@@ -1873,6 +1873,9 @@ const routes = {
     json(res, 200, { ok: true });
   },
   'GET /api/nutrition/products': nutritionGateway,
+  'GET /api/nutrition/external/products': nutritionGateway,
+  'GET /api/nutrition/external/products/{externalId}': nutritionGateway,
+  'POST /api/nutrition/products/import': nutritionGateway,
   'POST /api/nutrition/products': nutritionGateway,
   'GET /api/nutrition/products/{id}': nutritionGateway,
   'PUT /api/nutrition/products/{id}': nutritionGateway,

@@ -108,3 +108,25 @@ test('Nutrition tools preserve API payloads, retry IDs and historical snapshots'
   expect(() => call('nutrition_create_entry', { ...payload, quantity_grams: 2.1234 })).toThrow()
   expect(() => call('nutrition_get_entry', { entry_id: id, user_id: 'bob' })).toThrow()
 })
+
+test('External catalog tools require exact source identity and never accept model-supplied nutrients', async () => {
+  const calls = []
+  const tools = createNutritionTools(async (...args) => { calls.push(args); return { ok: true } })
+  const call = (name, args) => {
+    const tool = tools.find(t => t.name === name)
+    return tool.handler(z.object(tool.schema).strict().parse(args))
+  }
+  await call('nutrition_search_external_products', { search: 'Milka Oreo', brand: 'Milka', page: 2 })
+  await call('nutrition_get_external_product', { external_id: '7622210449283' })
+  const args = { source: 'openfoodfacts', external_id: '7622210449283', fingerprint: 'a'.repeat(64) }
+  await call('nutrition_create_product', args)
+  await call('nutrition_create_product', args)
+  expect(calls[0]).toEqual(['GET', '/api/nutrition/external/products', { search: 'Milka Oreo', brand: 'Milka', page: 2 }])
+  expect(calls[1]).toEqual(['GET', '/api/nutrition/external/products/7622210449283'])
+  expect(calls[2]).toEqual(['POST', '/api/nutrition/products/import', {}, {
+    source: args.source, externalId: args.external_id, fingerprint: args.fingerprint }])
+  expect(calls[3]).toEqual(calls[2])
+  expect(tools.find(t => t.name === 'nutrition_create_product')).toMatchObject({ scope: 'nutrition.write', idempotent: true, openWorld: true })
+  for (const extra of [{ calories: 100 }, { user_id: 'bob' }, { fingerprint: 'bad' }, { external_id: '../../me' }])
+    expect(() => call('nutrition_create_product', { ...args, ...extra })).toThrow()
+})

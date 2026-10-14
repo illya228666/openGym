@@ -8,24 +8,27 @@ if (!['http:', 'https:'].includes(target.protocol) || target.username || target.
 /** MCP uses the same HTTP service, with a short-lived operation-bound credential, never SQLite. */
 export async function requestNutrition(method, pathname, query = {}, body, credential) {
   const known = nutritionRoute(method, pathname)
-    || (method === 'GET' && ['/api/nutrition/products', '/api/nutrition/diary'].includes(pathname))
+    || (method === 'GET' && ['/api/nutrition/products', '/api/nutrition/diary', '/api/nutrition/external/products'].includes(pathname))
+    || (method === 'POST' && pathname === '/api/nutrition/products/import')
     || (method === 'POST' && pathname === '/api/nutrition/entries');
   if (!known) throw new Error('Unsupported Nutrition operation');
   const url = new URL(pathname, base);
-  for (const key of pathname.endsWith('/products') ? ['search', 'offset'] : ['date'])
+  for (const key of nutritionQuery(pathname))
     if (query[key] !== undefined) url.searchParams.set(key, query[key]);
   try {
     const response = await fetch(url, { method, headers: { Authorization: 'Bearer ' + credential,
       Accept: 'application/json', 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(8000) });
-    if (![200, 201, 400, 401, 403, 404, 409, 410, 413].includes(response.status))
+    if (![200, 201, 400, 401, 403, 404, 409, 410, 413, 422, 429, 502, 503].includes(response.status))
       throw new Error('Invalid Nutrition response');
     const raw = await response.text();
     if (raw.length > 8 * 1024 * 1024) throw new Error('Invalid Nutrition response');
     const result = JSON.parse(raw);
     if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Invalid Nutrition response');
     if (!response.ok) throw Object.assign(new Error(result.code || result.error || 'Nutrition request rejected'),
-      { code: result.code || 'nutrition_error', status: response.status });
+      { code: result.code || (response.status >= 500 ? 'nutrition_unavailable' : 'nutrition_error'), status: response.status,
+        ...(result.retryAfterSeconds ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
+        ...(response.status >= 500 && !result.code ? { uncertain: method !== 'GET' } : {}) });
     return result;
   } catch (error) {
     if (error.status) throw error;
@@ -56,16 +59,23 @@ export async function nutritionHello(req, res, { readSession, json }) {
 
 // Allowlisted paths only: never turn a client-supplied URL into an internal fetch target.
 export function nutritionRoute(method, pathname) {
+  if (method === 'GET' && /^\/api\/nutrition\/external\/products\/[0-9]{8,14}$/.test(pathname))
+    return 'GET /api/nutrition/external/products/{externalId}';
   const item = /^\/api\/nutrition\/(products|entries)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec(pathname);
   return item && ['GET', 'PUT', 'DELETE'].includes(method) ? `${method} /api/nutrition/${item[1]}/{id}` : null;
+}
+
+export function nutritionQuery(pathname) {
+  if (pathname === '/api/nutrition/products') return ['search', 'offset', 'brand', 'barcode', 'externalId', 'externalSource'];
+  if (pathname === '/api/nutrition/external/products') return ['search', 'brand', 'barcode', 'page'];
+  return pathname === '/api/nutrition/diary' ? ['date'] : [];
 }
 
 export async function nutritionProxy(req, res, { readSession, json, readBody }) {
   if (!readSession(req)) return json(res, 401, { error: 'not signed in' });
   const incoming = new URL(req.url, 'http://gateway');
   const url = new URL(incoming.pathname, base);
-  const allowed = incoming.pathname === '/api/nutrition/products' ? ['search', 'offset']
-    : incoming.pathname === '/api/nutrition/diary' ? ['date'] : [];
+  const allowed = nutritionQuery(incoming.pathname);
   if (req.method === 'GET') for (const name of allowed) {
     if (incoming.searchParams.has(name)) url.searchParams.set(name, incoming.searchParams.get(name));
   }
@@ -77,8 +87,7 @@ export async function nutritionProxy(req, res, { readSession, json, readBody }) 
   try {
     const response = await fetch(url, { method: req.method, headers, body,
       redirect: 'manual', signal: AbortSignal.timeout(8000) });
-    if (response.status >= 500) return json(res, response.status === 503 ? 503 : 502, { error: 'nutrition unavailable' });
-    if (![200, 201, 400, 401, 404, 409, 410, 413].includes(response.status))
+    if (![200, 201, 400, 401, 403, 404, 409, 410, 413, 422, 429, 502, 503].includes(response.status))
       return json(res, 502, { error: 'invalid nutrition response' });
     // The service's bounded catalog/day response may be larger than a write request.
     const raw = await response.text();
@@ -88,7 +97,8 @@ export async function nutritionProxy(req, res, { readSession, json, readBody }) 
     catch { return json(res, 502, { error: 'invalid nutrition response' }); }
     if (!result || typeof result !== 'object' || Array.isArray(result))
       return json(res, 502, { error: 'invalid nutrition response' });
-    return json(res, response.status, result);
+    return json(res, response.status, result, response.headers.get('retry-after')
+      ? { 'Retry-After': response.headers.get('retry-after') } : {});
   } catch {
     return json(res, 503, { error: 'nutrition unavailable' });
   }

@@ -15,7 +15,7 @@ namespace OpenGym.Nutrition.Persistence.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
 
             modelBuilder.Entity("OpenGym.Nutrition.Domain.DiaryEntry", b =>
                 {
@@ -81,6 +81,12 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("BrandSearchText")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Barcode")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Brand")
                         .HasMaxLength(100)
                         .HasColumnType("TEXT");
@@ -89,6 +95,12 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<decimal>("Carbohydrates")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExternalId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExternalSource")
                         .HasColumnType("TEXT");
 
                     b.Property<decimal>("Fat")
@@ -102,16 +114,34 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("NutritionSource")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PackageQuantity")
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal>("Protein")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("RetrievedAtUtc")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("SearchText")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("SourceFingerprint")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceUrl")
+                        .HasColumnType("TEXT");
+
                     b.HasKey("UserId", "Id");
 
                     b.HasIndex("UserId", "IsDeleted");
+
+                    b.HasIndex("UserId", "ExternalSource", "ExternalId")
+                        .IsUnique();
 
                     b.ToTable("Products");
                 });

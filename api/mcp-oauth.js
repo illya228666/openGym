@@ -114,7 +114,11 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
       || !binding || binding.userId !== claim.uid || !active(binding) || claim.sv !== binding.sessionVersion
       || !store.get('Grant', claim.grantId)) return null;
     const required = claim.method === 'GET' ? 'nutrition.read' : 'nutrition.write';
-    if (!binding.scopes.includes(required) || !/^\/api\/nutrition\/(products|diary|entries)(\/[0-9a-f-]{36})?$/.test(claim.pathname)) return null;
+    const allowed = (claim.method === 'GET' && /^\/api\/nutrition\/external\/products(?:\/[0-9]{8,14})?$/.test(claim.pathname))
+      || (claim.method === 'POST' && claim.pathname === '/api/nutrition/products/import')
+      || (/^\/api\/nutrition\/(products|diary|entries)(\/[0-9a-f-]{36})?$/.test(claim.pathname)
+        && ['GET', 'POST', 'PUT', 'DELETE'].includes(claim.method));
+    if (!binding.scopes.includes(required) || !allowed) return null;
     const user = userById(claim.uid);
     return { user: { id: user.id, name: user.name }, delegated: { method: claim.method, pathname: claim.pathname } };
   }

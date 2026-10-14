@@ -18,6 +18,9 @@ retry keys. A foreign id returns 404, not someone else's data.
 | --- | --- |
 | `GET /api/nutrition/products?search=&offset=0` | Unicode-normalized substring search of name/brand; 50 rows and `hasMore` |
 | `POST /api/nutrition/products` | Create a product |
+| `GET /api/nutrition/external/products?search=&brand=&barcode=&page=1` | Search OFF candidates; paginated, no automatic selection |
+| `GET /api/nutrition/external/products/{externalId}` | Read exact OFF nutrition and validation status |
+| `POST /api/nutrition/products/import` | Import by source/externalId/fingerprint; 201 created, 200 reused |
 | `GET, PUT, DELETE /api/nutrition/products/{id}` | Read, replace nutritional definition, remove from catalog |
 | `GET /api/nutrition/diary?date=2026-10-13` | Entries and unrounded daily totals |
 | `POST /api/nutrition/entries` | Create an entry with a client-generated UUID |
@@ -55,14 +58,65 @@ startup migrations succeed. No new public port is exposed.
   handle concurrent retries. Deletion markers retain the UUID/fingerprint so a late
   retry returns 410 and cannot resurrect food. The React form retains its UUID while
   open, including failed saves; after closing/reloading, check the diary before
-  adding again. This is not an offline queue. Product creation is not idempotent.
+  adding again. This is not an offline queue. Manual product creation is not idempotent;
+  external import is idempotent by user/source/external ID, including concurrent requests.
 
 Domain models, EF persistence, `NutritionService`, and endpoint contracts are separate
-small files. No repository/mediator framework was introduced. Future external ids,
-barcodes or additional nutrient columns can be additive migrations on Product; UUIDs
-are not derived from names or external identifiers. Future MCP clients can call the
-same user-scoped service/API and idempotent entry operation. Batch APIs, MCP tools,
-external catalogs, recipes, targets and dietary advice are deliberately absent.
+small files. No repository/mediator framework was introduced. Imported products have
+nullable source, external ID/barcode, package quantity, source URL, nutrition origin,
+retrieval time and source fingerprint. UUIDs are not derived from names. Existing
+products and diary snapshots retain their identities and values across the additive
+migration. Search text and brands are backfilled with Unicode normalization before
+serving; no flavors, numbers or package variants are removed.
+
+## Open Food Facts and MCP import
+
+MCP uses the existing HTTP API and OAuth scopes: `nutrition.read` for lookup,
+`nutrition.write` for import. Personal product search also accepts `brand`, `barcode`,
+`externalId` and `externalSource` filters. Every personal operation remains user-scoped.
+External caches contain only public OFF data, never personal products or credentials.
+Barcode zero-padding aliases are canonicalized using OFF rules (8/13-digit padding);
+nonzero GTIN-14 package codes remain distinct.
+
+Search uses the legacy full-text endpoint; exact reads explicitly request `/api/v3.6/product`
+(the unversioned v3 response defaults to legacy nutrient fields). Reads accept only complete explicit manufacturer or
+packaging input sets for the as-sold product per **100 g**. Manufacturer has priority;
+conflicts at the same priority or incomplete preferred sets block import. Missing,
+estimated, computed-only, approximate, prepared, per-serving and per-100ml data are
+not treated as trustworthy grams. Explicit zeroes are valid. Units are converted
+deterministically (including kJ/4.184 for kcal), then rounded to the existing three
+decimal places. OFF nutrition quality errors/warnings block automatic import.
+
+The server re-fetches the selected card on a new import, compares its fingerprint and
+saves the values itself. Changed cards return `409 external_product_changed`; invalid
+nutrition returns `422 external_product_unverified`. Existing personal products are
+reused before accessing OFF and never overwritten. Deleted products return
+`410 product_deleted`; manual nutrient edits mark `nutritionSource: user` while
+retaining external identity and original source metadata. History remains unchanged.
+
+The singleton OFF client uses a 5-second timeout, no redirects/cookie jar, a custom
+User-Agent and a 2 MiB response limit. Its 1000-entry cache retains searches 5 minutes,
+cards 15 minutes and missing cards 1 minute; identical concurrent reads share a request.
+Outgoing rolling budgets are 10 searches/minute and 15 product reads/minute for this
+single service instance. OFF 429 responses pause requests according to Retry-After;
+errors are not retried automatically. `429 external_rate_limited` includes retry time;
+`503 external_unavailable` and `502 external_invalid_response` leave the catalog alone.
+Existing personal products remain usable offline from OFF. Multiple replicas/shared
+egress require a shared rate budget before deployment; the current deployment is one
+Nutrition instance.
+
+`OpenFoodFacts__BaseUrl` is trusted operator configuration, defaulting to
+`https://world.openfoodfacts.org`; only disposable tests replace it with the HTTP
+fixture. It is never a tool argument. No authentication or write requests are sent
+to OFF. Attribution: [Open Food Facts](https://world.openfoodfacts.org), available
+under [ODbL](https://opendatacommons.org/licenses/odbl/1-0/). OFF is community data,
+with no guarantee of accuracy; validation does not imply independent manufacturer
+verification. Preserve attribution in redistribution and follow OFF reuse terms.
+
+The AI searches personal products first, resolves ambiguous flavor/brand/package
+details, reads the selected OFF card, imports with its fingerprint and records actual
+user-supplied grams. Unambiguous checked products need no redundant confirmation.
+Photos, portions/pieces, inferred weights and internal AI services are not included.
 
 ## SQLite, Docker and migrations
 

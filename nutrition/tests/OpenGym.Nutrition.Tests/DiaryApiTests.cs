@@ -219,7 +219,7 @@ public sealed class DiaryApiTests
             await connection.OpenAsync();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM __EFMigrationsHistory";
-            Assert.Equal(1L, await command.ExecuteScalarAsync());
+            Assert.Equal(2L, await command.ExecuteScalarAsync());
         }
         finally { SqliteConnection.ClearAllPools(); if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
@@ -229,7 +229,9 @@ public sealed class DiaryApiTests
     {
         using var factory = new DiaryFactory();
         using var client = factory.CreateClient();
-        foreach (var (method, path) in new[] { (HttpMethod.Get, "products"), (HttpMethod.Post, "products"),
+        foreach (var (method, path) in new[] { (HttpMethod.Get, "external/products"),
+            (HttpMethod.Get, "external/products/7622210449283"), (HttpMethod.Post, "products/import"),
+            (HttpMethod.Get, "products"), (HttpMethod.Post, "products"),
             (HttpMethod.Get, "diary?date=2026-10-13"), (HttpMethod.Post, "entries"),
             (HttpMethod.Get, "products/" + Guid.NewGuid()), (HttpMethod.Put, "products/" + Guid.NewGuid()),
             (HttpMethod.Delete, "products/" + Guid.NewGuid()), (HttpMethod.Get, "entries/" + Guid.NewGuid()),

@@ -12,15 +12,35 @@ namespace OpenGym.Nutrition.Services;
 /// <summary>User-scoped operations shared by HTTP clients; no UI or gateway policy lives here.</summary>
 public sealed class NutritionService(NutritionDbContext db)
 {
-    public async Task<ProductPage> Products(string userId, string? search, int offset, CancellationToken ct)
+    public async Task<ProductPage> Products(string userId, string? search, int offset, CancellationToken ct,
+        string? brand = null, string? barcode = null, string? externalId = null, string? externalSource = null)
     {
-        if (offset < 0 || search?.Length > 200) throw Invalid();
+        if (offset < 0 || search?.Length > 200 || brand?.Length > 100
+            || (barcode is not null && !ProductSearch.ValidCode(barcode))
+            || (externalId is not null && !ProductSearch.ValidCode(externalId))
+            || (externalSource is not null && externalSource != OpenFoodFacts.Source)) throw Invalid();
         var query = db.Products.AsNoTracking().Where(p => p.UserId == userId && !p.IsDeleted);
         if (!string.IsNullOrWhiteSpace(search))
         {
-            var term = search.Trim().ToUpperInvariant();
-            query = query.Where(p => p.SearchText.Contains(term));
+            foreach (var term in ProductSearch.Normalize(search).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                query = query.Where(p => p.SearchText.Contains(term));
         }
+        if (!string.IsNullOrWhiteSpace(brand))
+        {
+            var term = ProductSearch.Normalize(brand);
+            query = query.Where(p => p.BrandSearchText != null && p.BrandSearchText.Contains(term));
+        }
+        if (barcode is not null)
+        {
+            barcode = ProductSearch.CanonicalCode(barcode);
+            query = query.Where(p => p.Barcode == barcode);
+        }
+        if (externalId is not null)
+        {
+            externalId = ProductSearch.CanonicalCode(externalId);
+            query = query.Where(p => p.ExternalId == externalId);
+        }
+        if (externalSource is not null) query = query.Where(p => p.ExternalSource == externalSource);
         var rows = await query.OrderBy(p => p.SearchText).ThenBy(p => p.Id).Skip(offset).Take(51).ToListAsync(ct);
         return new(rows.Take(50).Select(ProductView).ToArray(), rows.Count > 50);
     }
@@ -38,7 +58,11 @@ public sealed class NutritionService(NutritionDbContext db)
         var product = id.HasValue ? await FindProduct(userId, id.Value, ct) : new Product { UserId = userId, Id = Guid.NewGuid() };
         product.Name = name;
         product.Brand = brand;
-        product.SearchText = (name + " " + brand).ToUpperInvariant();
+        product.SearchText = ProductSearch.Normalize(name + " " + brand + " " + product.PackageQuantity);
+        product.BrandSearchText = ProductSearch.Normalize(brand ?? "");
+        if (id.HasValue && (product.Calories != request.Calories || product.Protein != request.Protein
+            || product.Fat != request.Fat || product.Carbohydrates != request.Carbohydrates))
+            product.NutritionSource = "user";
         product.Calories = request.Calories!.Value;
         product.Protein = request.Protein!.Value;
         product.Fat = request.Fat!.Value;
@@ -46,6 +70,42 @@ public sealed class NutritionService(NutritionDbContext db)
         if (!id.HasValue) db.Products.Add(product);
         await db.SaveChangesAsync(ct);
         return ProductView(product);
+    }
+
+    public async Task<(ProductResponse Product, bool Created)> ImportProduct(string userId, ImportProductRequest request,
+        OpenFoodFacts external, CancellationToken ct)
+    {
+        if (request.Source != OpenFoodFacts.Source || !ProductSearch.ValidCode(request.ExternalId)
+            || request.Fingerprint is null || request.Fingerprint.Length != 64
+            || !request.Fingerprint.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')) throw Invalid();
+        request = request with { ExternalId = ProductSearch.CanonicalCode(request.ExternalId!) };
+        Task<Product?> Existing() => db.Products.AsNoTracking().SingleOrDefaultAsync(p => p.UserId == userId
+            && p.ExternalSource == request.Source && p.ExternalId == request.ExternalId, ct);
+        static (ProductResponse, bool) Reuse(Product product) => product.IsDeleted
+            ? throw new NutritionException(410, "product_deleted") : (ProductView(product), false);
+        var existing = await Existing();
+        if (existing is not null) return Reuse(existing);
+        var food = await external.Product(request.ExternalId!, ct, refresh: true);
+        if (!food.CanImport || food.Per100Grams is null) throw new NutritionException(422, "external_product_unverified");
+        if (food.Fingerprint != request.Fingerprint) throw new NutritionException(409, "external_product_changed");
+        var product = new Product { Id = Guid.NewGuid(), UserId = userId, Name = food.Name, Brand = food.Brand,
+            SearchText = ProductSearch.Normalize(food.Name + " " + food.Brand + " " + food.PackageQuantity),
+            BrandSearchText = ProductSearch.Normalize(food.Brand ?? ""),
+            Calories = food.Per100Grams.Calories, Protein = food.Per100Grams.Protein,
+            Fat = food.Per100Grams.Fat, Carbohydrates = food.Per100Grams.Carbohydrates,
+            ExternalSource = food.Source, ExternalId = food.ExternalId, Barcode = food.ExternalId,
+            PackageQuantity = food.PackageQuantity, SourceUrl = food.SourceUrl,
+            NutritionSource = food.NutritionSource, SourceFingerprint = food.Fingerprint, RetrievedAtUtc = food.RetrievedAtUtc };
+        db.Products.Add(product);
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException ex) when (ex.InnerException is SqliteException { SqliteErrorCode: 19 })
+        {
+            db.ChangeTracker.Clear();
+            existing = await Existing();
+            if (existing is null) throw;
+            return Reuse(existing);
+        }
+        return (ProductView(product), true);
     }
 
     public async Task DeleteProduct(string userId, Guid id, CancellationToken ct)
@@ -144,7 +204,8 @@ public sealed class NutritionService(NutritionDbContext db)
         entry.Carbohydrates = product.Carbohydrates;
     }
 
-    private static ProductResponse ProductView(Product p) => new(p.Id, p.Name, p.Brand, p.Calories, p.Protein, p.Fat, p.Carbohydrates);
+    private static ProductResponse ProductView(Product p) => new(p.Id, p.Name, p.Brand, p.Calories, p.Protein, p.Fat, p.Carbohydrates,
+        p.ExternalSource, p.ExternalId, p.Barcode, p.PackageQuantity, p.SourceUrl, p.NutritionSource, p.RetrievedAtUtc, p.SourceFingerprint);
     private static EntryResponse EntryView(DiaryEntry e)
     {
         var per100 = new Nutrients(e.Calories, e.Protein, e.Fat, e.Carbohydrates);

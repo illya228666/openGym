@@ -24,7 +24,7 @@ vi.mock('../sheets.jsx', () => ({ confirmSheet: vi.fn() }))
 const settings = () => ({ enabled: true, url: 'https://gym.example/mcp', timezone: 'Europe/Berlin',
   clients: [{ client_id: 'opengym-chatgpt', client_name: 'ChatGPT' }],
   scopes: ['training.read', 'nutrition.read', 'nutrition.write'] })
-const grant = { grantId: 'own-grant', clientId: 'opengym-chatgpt', scopes: ['nutrition.read'], created: '2026-10-14T06:00:00Z' }
+const grant = { grantId: 'own-grant', clientId: 'opengym-chatgpt', scopes: ['nutrition.read', 'nutrition.write'], created: '2026-10-14T06:00:00Z' }
 let host, root
 beforeEach(() => {
   vi.clearAllMocks()
@@ -40,6 +40,7 @@ it('shows public MCP details and revokes only the confirmed owned connection', a
   await mount()
   expect(host.textContent).toContain('https://gym.example/mcp')
   expect(host.textContent).toContain('Read products, diary and nutritional totals')
+  expect(host.textContent).toContain('Import products and create, edit and delete food diary entries')
   expect(host.textContent).not.toContain('Client ID:')
   expect(host.querySelector('[role="switch"]')).toBeNull()
   expect(host.querySelector('form')).toBeNull()

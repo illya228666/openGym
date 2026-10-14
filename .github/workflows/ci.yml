@@ -127,8 +127,9 @@ jobs:
         run: |
           docker network create opengym-ci
           docker volume create opengym-ci-nutrition
+          docker run -d --name off-fixture --network opengym-ci -v "$PWD/scripts/ci/off-fixture.mjs:/fixture.mjs:ro" node:22-alpine node /fixture.mjs
           docker run -d --name api --network opengym-ci -e DATA_DIR=/data -e PASSWORD_LOGIN=1 -e FIRST_USER_ADMIN=1 -e NUTRITION_URL=http://nutrition:8080 opengym-api:ci
-          docker run -d --name nutrition --network opengym-ci -v opengym-ci-nutrition:/data -e OpenGym__ApiBaseUrl=http://api:3000 -e NO_PROXY=api,nutrition,localhost,127.0.0.1 opengym-nutrition:ci
+          docker run -d --name nutrition --network opengym-ci -v opengym-ci-nutrition:/data -e OpenGym__ApiBaseUrl=http://api:3000 -e OpenFoodFacts__BaseUrl=http://off-fixture:5099 -e NO_PROXY=api,nutrition,off-fixture,localhost,127.0.0.1 opengym-nutrition:ci
           docker run -d --name web --network opengym-ci -p 127.0.0.1:8080:80 opengym-web:ci
           curl --retry 30 --retry-delay 1 --retry-all-errors --fail http://localhost:8080/api/health
           curl --fail http://localhost:8080/api/config
@@ -138,7 +139,7 @@ jobs:
           node scripts/ci/mcp-smoke.mjs http://localhost:8080 --disposable
           node scripts/ci/nutrition-smoke.mjs http://localhost:8080
           docker rm -f nutrition
-          docker run -d --name nutrition --network opengym-ci -v opengym-ci-nutrition:/data -e OpenGym__ApiBaseUrl=http://api:3000 -e NO_PROXY=api,nutrition,localhost,127.0.0.1 opengym-nutrition:ci
+          docker run -d --name nutrition --network opengym-ci -v opengym-ci-nutrition:/data -e OpenGym__ApiBaseUrl=http://api:3000 -e OpenFoodFacts__BaseUrl=http://off-fixture:5099 -e NO_PROXY=api,nutrition,off-fixture,localhost,127.0.0.1 opengym-nutrition:ci
           docker exec -i api node --input-type=module < scripts/ci/nutrition-internal-smoke.mjs
           node scripts/ci/nutrition-smoke.mjs http://localhost:8080 --verify-persistence
       - name: Container diagnostics
@@ -184,12 +185,12 @@ jobs:
               echo "Publication does **not** prove that the server has deployed them; check the deployment status separately."
             } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "### ✅ Manual checks passed — no images published" >> "$GITHUB_STEP_SUMMARY"
+            echo "### ✅ Development/manual checks passed — no images published" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Clean up smoke containers
         if: always()
         run: |
-          docker rm -f web api nutrition || true
+          docker rm -f web api nutrition off-fixture || true
           docker volume rm opengym-ci-nutrition || true
           docker network rm opengym-ci || true
 
