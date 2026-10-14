@@ -11,10 +11,7 @@ name: Publish Docker images
 # published at once left it pointing at whichever finished last.) Re-running the
 # workflow by hand on a `vX.Y.Z` ref republishes exactly that version's tags.
 on:
-  push:
-    branches: [main]
-  release:
-    types: [published]
+  # This fork uses ci.yml. Keep upstream-only workflow dormant on normal pushes/PRs.
   workflow_dispatch:
 
 permissions:

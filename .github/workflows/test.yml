@@ -1,33 +1,8 @@
-# Runs on pull requests too — the other two workflows only fire on push to main, so
-# contributed changes used to reach main without anything ever having been run.
+# Upstream-only test workflow. This fork validates through ci.yml instead.
 name: Tests
 
 on:
-  pull_request:
-    paths:
-      - 'frontend/**'
-      - 'api/**'
-      - 'mcp/**'
-      - 'nutrition/**'
-      - 'scripts/build-coach-assets.mjs'
-      - 'scripts/build-coach-library.mjs'
-      - 'scripts/build-api-docs.mjs'
-      - 'website/api.html'
-      - 'api/coach/prompts/**'
-      - '.github/workflows/test.yml'
-  push:
-    branches: [main, coach]
-    paths:
-      - 'frontend/**'
-      - 'api/**'
-      - 'mcp/**'
-      - 'nutrition/**'
-      - 'scripts/build-coach-assets.mjs'
-      - 'scripts/build-coach-library.mjs'
-      - 'scripts/build-api-docs.mjs'
-      - 'website/api.html'
-      - 'api/coach/prompts/**'
-      - '.github/workflows/test.yml'
+  # This fork uses ci.yml. Keep upstream-only workflow dormant on normal pushes/PRs.
   workflow_dispatch:
 
 permissions:
