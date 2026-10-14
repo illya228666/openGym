@@ -1,5 +1,7 @@
 // German UI strings. Keys are the English source strings (see lib/i18n.js).
 export default {
+  'Add the MCP URL in your AI client, sign in to OpenGym and approve the requested permissions. OAuth registration is automatic.': 'Füge die MCP-URL in deinem KI-Client hinzu, melde dich bei OpenGym an und bestätige die angeforderten Berechtigungen. Die OAuth-Registrierung erfolgt automatisch.',
+  'The switch applies immediately. Turning MCP off preserves connections but blocks new requests.': 'Der Schalter wirkt sofort. Beim Ausschalten bleiben Verbindungen erhalten, neue Anfragen werden jedoch blockiert.',
   "MCP": "MCP",
   "Could not load MCP settings. Try again.": "MCP-Einstellungen konnten nicht geladen werden. Erneut versuchen.",
   "Could not copy. Select and copy the value.": "Kopieren fehlgeschlagen. Wert markieren und kopieren.",

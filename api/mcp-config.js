@@ -3,6 +3,7 @@ import path from 'node:path';
 import { atomicWrite } from './durable.js';
 
 export const McpScopes = ['training.read', 'nutrition.read', 'nutrition.write'];
+export const MaxDynamicClients = 1000;
 const loopback = url => ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
 const invalid = message => { throw Object.assign(new Error(message), { status: 400 }); };
 
@@ -16,8 +17,8 @@ export function validateMcpConfiguration(value, origin) {
     || !['http:', 'https:'].includes(resource.protocol) || (value.enabled && resource.protocol !== 'https:' && !loopback(resource)))
     invalid('MCP URL must be HTTPS and end in /mcp (HTTP is localhost-only)');
   if (resource.origin !== new URL(origin).origin) invalid('MCP must use the existing OpenGym origin');
-  if (!Array.isArray(value.clients) || value.clients.length > 10 || (value.enabled && !value.clients.length))
-    invalid('Enabled MCP requires at least one OAuth client (maximum 10)');
+  if (!Array.isArray(value.clients) || value.clients.length > 10)
+    invalid('MCP legacy clients must be an array (maximum 10)');
   const identifiers = new Set();
   const clients = value.clients.map(client => {
     if (!client || typeof client.client_id !== 'string' || !client.client_id.trim() || client.client_id.length > 128
@@ -40,7 +41,7 @@ export function validateMcpConfiguration(value, origin) {
   return { enabled: value.enabled, url: resource.href, clients };
 }
 
-/** Environment bootstraps settings; durable GUI settings take precedence on the next API start. */
+/** Preserve legacy URL/clients; the only live user setting is the durable enable switch. */
 export function createMcpConfiguration({ data, origin, env = process.env }) {
   const file = path.join(data, 'mcp-settings.json');
   let saved;
@@ -54,16 +55,20 @@ export function createMcpConfiguration({ data, origin, env = process.env }) {
       url: env.MCP_PUBLIC_URL || origin + '/mcp', clients: JSON.parse(env.MCP_OAUTH_CLIENTS || '[]') }, origin);
   }
   const effective = structuredClone(saved);
+  const validate = value => {
+    if (!value || typeof value.enabled !== 'boolean' || Object.keys(value).some(key => key !== 'enabled'))
+      invalid('Only the MCP enabled switch can be changed');
+    return validateMcpConfiguration({ ...effective, enabled: value.enabled }, origin);
+  };
   return {
     effective,
-    status: admin => ({ enabled: effective.enabled, url: effective.url,
-      clients: effective.clients.map(({ client_id, client_name }) => ({ client_id, client_name })),
-      scopes: McpScopes, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      ...(admin ? { saved: structuredClone(saved), restartRequired: JSON.stringify(saved) !== JSON.stringify(effective) } : {}) }),
+    validate,
+    status: () => ({ enabled: effective.enabled, url: effective.url }),
     save: value => {
-      const next = validateMcpConfiguration(value, origin);
+      const next = validate(value);
       atomicWrite(file, JSON.stringify({ version: 1, settings: next }), 0o600);
       saved = next;
+      effective.enabled = next.enabled;
     }
   };
 }

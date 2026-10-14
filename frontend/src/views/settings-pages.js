@@ -52,9 +52,7 @@ const remind = c => !!c.mobile || !!c.pushOK
 const PUSH = 'Push notifications'
 export const SEARCH = [
   { page: 'mcp', title: 'MCP URL', icon: 'cloud', tint: 'var(--blue)', kw: 'endpoint oauth chatgpt copy address', when: c => !!c.user && !c.demo },
-  { page: 'mcp', title: 'Read training plans and statistics', icon: 'shield', tint: 'var(--blue)', kw: 'mcp training permission scope read' },
-  { page: 'mcp', title: 'Read products, diary and nutritional totals', icon: 'shield', tint: 'var(--blue)', kw: 'mcp nutrition permission scope read' },
-  { page: 'mcp', title: 'Create, edit and delete food diary entries', icon: 'shield', tint: 'var(--blue)', kw: 'mcp nutrition permission scope write' },
+  { page: 'mcp', title: 'Sign in to manage MCP connections.', icon: 'personCircle', tint: 'var(--blue)', kw: 'chatgpt oauth account connect', when: c => !c.user || c.demo },
   // Workout
   { page: 'workout', title: 'Rest timer', icon: 'timer', tint: 'var(--orange)', kw: 'rest pause break seconds minutes timer countdown' },
   { page: 'workout', title: 'Rest-pause rest', icon: 'bolt', tint: 'var(--orange)', kw: 'burst cluster rest pause' },

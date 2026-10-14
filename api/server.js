@@ -1845,7 +1845,12 @@ const routes = {
   },
   'PUT /api/mcp/settings': async (req, res) => {
     const user = requireAdmin(req, res); if (!user) return;
-    try { mcpConfiguration.save(await readBody(req)); }
+    try {
+      const settings = await readBody(req);
+      mcpConfiguration.validate(settings);
+      if (settings?.enabled === true) await ensureMcpRuntime();
+      mcpConfiguration.save(settings);
+    }
     catch (error) {
       if (error.status === 400) return json(res, 400, { error: error.message });
       throw error;
@@ -1909,7 +1914,7 @@ const routes = {
       // Public like the two flags above: the caps are not a secret, and the absence of the
       // block is how the app knows this server does not take photos and videos at all.
       ...(MEDIA_ON ? { media: mediaConfig(MEDIA_LIMITS) } : {}),
-      ...(mcpOAuth ? { mcp: { url: mcpOAuth.resource.href } } : {}),
+      ...(mcpConfiguration.effective.enabled ? { mcp: { url: mcpConfiguration.effective.url } } : {}),
       ...(readSession(req) ? { coach: coachConfig.publicConfig() } : {})
     });
   },
@@ -2578,7 +2583,10 @@ async function mcpConnectionStore() {
   if (!mcpStore) {
     const { createOAuthStore } = await import('./mcp-oauth-store.js');
     // Reuse the provider's store while running; disabled MCP still permits own-grant revocation.
-    if (!mcpStore) mcpStore = mcpOAuth?.store || createOAuthStore(path.join(DATA, 'mcp-oauth.json'), SECRET);
+    if (!mcpStore) mcpStore = mcpOAuth?.store || createOAuthStore(path.join(DATA, 'mcp-oauth.json'), SECRET, binding => {
+      const user = db.users.find(user => user.id === binding.userId);
+      return !!user && !user.disabled && (user.sv || 0) === binding.sessionVersion;
+    });
   }
   return mcpStore;
 }
@@ -2587,12 +2595,20 @@ async function mcpConnections(user) {
     .filter(grant => grant.userId === user.id && grant.sessionVersion === (user.sv || 0));
 }
 const mcpAuthBudget = createWindow({ max: 120, windowMs: 60000 });
-if (mcpConfiguration.effective.enabled) {
+const mcpRegistrationBudget = createWindow({ max: 5, windowMs: 60000 });
+let mcpStarting;
+async function ensureMcpRuntime() {
+  if (remoteMcp) return;
+  if (!mcpStarting) mcpStarting = startMcpRuntime().catch(error => { mcpStarting = null; throw error; });
+  return mcpStarting;
+}
+async function startMcpRuntime() {
   const { createMcpOAuth } = await import('./mcp-oauth.js');
   const { createHttpMcp } = await import('../mcp/src/http.js');
   mcpOAuth = createMcpOAuth({ data: DATA, secret: SECRET, origin: ORIGIN, publicUrl: mcpConfiguration.effective.url,
     clients: mcpConfiguration.effective.clients, userById: id => db.users.find(user => user.id === id),
-    readSession, json });
+    readSession, json, store: mcpStore || undefined });
+  mcpStore = mcpOAuth.store;
   const budget = createWindow({ max: 120, windowMs: 60000 });
   remoteMcp = createHttpMcp({ oauth: mcpOAuth, json, requestNutrition, takeBudget: id => budget.take(id),
     readState: id => {
@@ -2601,6 +2617,7 @@ if (mcpConfiguration.effective.enabled) {
       return state;
     } });
 }
+if (mcpConfiguration.effective.enabled) await ensureMcpRuntime();
 function bodyDeadline(req) {
   if (req.complete) return;
   // The socket itself, not req: a route that answered without reading the body has finished its
@@ -2646,17 +2663,25 @@ const server = http.createServer(async (req, res) => {
   try { url = new URL(req.url, 'http://x'); }
   catch { return json(res, 400, { error: 'bad request' }); }
   let key = req.method + ' ' + url.pathname;
-  if (remoteMcp) {
+  // Check once at request admission. Already admitted requests finish; ordinary sessions are untouched.
+  if (url.pathname === '/mcp' || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/.well-known/oauth-')) {
+    if (!mcpConfiguration.effective.enabled) return json(res, 404, { error: 'mcp_disabled' });
+  }
+  if (url.pathname === '/api/mcp/nutrition/identity' && req.method === 'GET') {
+    const identity = mcpOAuth?.nutritionIdentity((req.headers.authorization || '').replace(/^Bearer /, ''));
+    return json(res, identity ? 200 : 401, identity || { error: 'invalid delegation' });
+  }
+  if (remoteMcp && mcpConfiguration.effective.enabled) {
     try {
+      if (url.pathname === '/oauth/reg' && req.method === 'POST') {
+        const retryAfter = mcpRegistrationBudget.take(limitAddress(req));
+        if (retryAfter) return json(res, 429, { error: 'rate_limited' }, { 'Retry-After': String(retryAfter) });
+      }
       if (url.pathname.startsWith('/oauth/') && !url.pathname.startsWith('/oauth/.well-known/')) {
         const retryAfter = mcpAuthBudget.take(limitAddress(req));
         if (retryAfter) return json(res, 429, { error: 'rate_limited' }, { 'Retry-After': String(retryAfter) });
       }
       if (url.pathname === '/mcp') { await remoteMcp.handle(req, res); return; }
-      if (url.pathname === '/api/mcp/nutrition/identity' && req.method === 'GET') {
-        const identity = mcpOAuth.nutritionIdentity((req.headers.authorization || '').replace(/^Bearer /, ''));
-        return json(res, identity ? 200 : 401, identity || { error: 'invalid delegation' });
-      }
       if (await mcpOAuth.handle(req, res, url.pathname)) return;
     } catch (error) {
       console.error('mcp request failed:', error.code || error.name, error.syscall || '');
