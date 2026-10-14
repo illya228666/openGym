@@ -55,7 +55,7 @@ export default {
   "After saving, the administrator must restart the API container. Disabling MCP does not delete existing grants; revoke them separately.": "Nach dem Speichern muss der Administrator den API-Container neu starten. Ausschalten löscht keine bestehenden Freigaben; diese separat widerrufen.",
   "Read training plans and statistics": "Trainingspläne und Statistiken lesen",
   "Read products, diary and nutritional totals": "Produkte, Tagebuch und Nährwertsummen lesen",
-  "Create, edit and delete food diary entries": "Ernährungseinträge erstellen, bearbeiten und löschen",
+  "Import products and create, edit and delete food diary entries": "Produkte importieren sowie Ernährungseinträge erstellen, bearbeiten und löschen",
   "Saving…": "Wird gespeichert…",
   "Food diary": "Ernährungstagebuch",
   "My products": "Meine Produkte",

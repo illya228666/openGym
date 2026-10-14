@@ -34,6 +34,21 @@ Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
 builder.Services.AddDbContext<NutritionDbContext>(options => options.UseSqlite(
     new SqliteConnectionStringBuilder { DataSource = databasePath, DefaultTimeout = 5 }.ToString()));
 builder.Services.AddScoped<NutritionService>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<OpenFoodFacts>();
+// Only deployment configuration can replace the public origin (e.g. a disposable OFF fixture).
+var offOrigin = builder.Configuration["OpenFoodFacts:BaseUrl"] ?? "https://world.openfoodfacts.org";
+if (!Uri.TryCreate(offOrigin, UriKind.Absolute, out var offUri)
+    || offUri.Scheme is not ("https" or "http") || !string.IsNullOrEmpty(offUri.UserInfo)
+    || offUri.AbsolutePath != "/" || !string.IsNullOrEmpty(offUri.Query) || !string.IsNullOrEmpty(offUri.Fragment))
+    throw new InvalidOperationException("OpenFoodFacts:BaseUrl must be a trusted HTTP(S) origin.");
+builder.Services.AddHttpClient(OpenFoodFacts.ClientName, client =>
+{
+    client.BaseAddress = offUri;
+    client.Timeout = TimeSpan.FromSeconds(5);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("OpenGym/0.2 (https://github.com/illya228666/openGym)");
+    client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false });
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 64 * 1024);
 
 var app = builder.Build();
@@ -42,6 +57,20 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<NutritionDbContext>();
     // Single service instance: fail startup on migration failure rather than serve an empty database.
     await db.Database.MigrateAsync();
+    // Nullable brand search marks legacy rows. Bounded, resumable backfill runs before serving;
+    // SQLite UPPER cannot perform .NET Unicode normalization on existing Cyrillic/etc. names.
+    while (true)
+    {
+        var legacy = await db.Products.Where(p => p.BrandSearchText == null).Take(500).ToListAsync();
+        if (legacy.Count == 0) break;
+        foreach (var product in legacy)
+        {
+            product.SearchText = ProductSearch.Normalize(product.Name + " " + product.Brand + " " + product.PackageQuantity);
+            product.BrandSearchText = ProductSearch.Normalize(product.Brand ?? "");
+        }
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+    }
 }
 app.Use(async (context, next) =>
 {
@@ -50,7 +79,8 @@ app.Use(async (context, next) =>
     catch (NutritionException ex)
     {
         context.Response.StatusCode = ex.Status;
-        await context.Response.WriteAsJsonAsync(new { error = ex.Code, code = ex.Code });
+        if (ex.RetryAfterSeconds is not null) context.Response.Headers.RetryAfter = ex.RetryAfterSeconds.Value.ToString();
+        await context.Response.WriteAsJsonAsync(new { error = ex.Code, code = ex.Code, retryAfterSeconds = ex.RetryAfterSeconds });
     }
     catch (BadHttpRequestException ex)
     {

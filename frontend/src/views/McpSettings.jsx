@@ -11,7 +11,7 @@ import { Section, Row, Button, Switch } from '../components/ui.jsx'
 const scopeLabels = {
   'training.read': 'Read training plans and statistics',
   'nutrition.read': 'Read products, diary and nutritional totals',
-  'nutrition.write': 'Create, edit and delete food diary entries',
+  'nutrition.write': 'Import products and create, edit and delete food diary entries',
 }
 
 /** Public URL, account-owned grants and one administrator enable switch. */

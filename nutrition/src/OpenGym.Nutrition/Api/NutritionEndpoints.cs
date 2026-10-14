@@ -8,8 +8,20 @@ public static class NutritionEndpoints
     public static void MapNutrition(this WebApplication app)
     {
         var api = app.MapGroup("/api/nutrition").RequireAuthorization();
-        api.MapGet("/products", (ClaimsPrincipal user, NutritionService service, string? search, int? offset, CancellationToken ct) =>
-            service.Products(UserId(user), search, offset ?? 0, ct));
+        api.MapGet("/products", (ClaimsPrincipal user, NutritionService service, string? search, string? brand,
+            string? barcode, string? externalId, string? externalSource, int? offset, CancellationToken ct) =>
+            service.Products(UserId(user), search, offset ?? 0, ct, brand, barcode, externalId, externalSource));
+        api.MapGet("/external/products", (OpenFoodFacts external, string? search, string? brand, string? barcode, int? page, CancellationToken ct) =>
+            external.Search(search, brand, barcode, page ?? 1, ct));
+        api.MapGet("/external/products/{externalId}", (OpenFoodFacts external, string externalId, CancellationToken ct) =>
+            external.Product(externalId, ct));
+        api.MapPost("/products/import", async (ClaimsPrincipal user, NutritionService service,
+            OpenFoodFacts external, ImportProductRequest request, CancellationToken ct) =>
+        {
+            var result = await service.ImportProduct(UserId(user), request, external, ct);
+            return result.Created ? Results.Created($"/api/nutrition/products/{result.Product.Id}", result.Product)
+                : Results.Ok(result.Product);
+        });
         api.MapGet("/products/{id:guid}", (ClaimsPrincipal user, NutritionService service, Guid id, CancellationToken ct) =>
             service.Product(UserId(user), id, ct));
         api.MapPost("/products", async (ClaimsPrincipal user, NutritionService service, ProductRequest request, CancellationToken ct) =>

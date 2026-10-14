@@ -13,6 +13,8 @@ public sealed class NutritionDbContext(DbContextOptions<NutritionDbContext> opti
         var products = modelBuilder.Entity<Product>();
         products.HasKey(p => new { p.UserId, p.Id });
         products.HasIndex(p => new { p.UserId, p.IsDeleted });
+        // Includes tombstones: an import retry must never silently resurrect deleted food.
+        products.HasIndex(p => new { p.UserId, p.ExternalSource, p.ExternalId }).IsUnique();
         products.Property(p => p.Name).HasMaxLength(200);
         products.Property(p => p.Brand).HasMaxLength(100);
 

@@ -55,7 +55,7 @@ export default {
   "After saving, the administrator must restart the API container. Disabling MCP does not delete existing grants; revoke them separately.": "После сохранения администратор должен перезапустить контейнер API. Выключение MCP не удаляет разрешения — отзывайте их отдельно.",
   "Read training plans and statistics": "Чтение планов тренировок и статистики",
   "Read products, diary and nutritional totals": "Чтение продуктов, дневника и итогов питания",
-  "Create, edit and delete food diary entries": "Создание, изменение и удаление записей питания",
+  "Import products and create, edit and delete food diary entries": "Импорт продуктов, создание, изменение и удаление записей питания",
   "Saving…": "Сохранение…",
   "Food diary": "Дневник питания",
   "My products": "Мои продукты",

@@ -195,13 +195,13 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
     assert.equal(result.result.structuredContent.routines[0].name, name);
   }
   const list = await mcpJson(await rpc(alice.access_token, 'tools/list'));
-  assert.equal(list.result.tools.length, 16);
+  assert.equal(list.result.tools.length, 19);
   const discovered = await mcpJson(await rpc(alice.access_token, 'server/discover', {}, '2026-07-28'));
   assert.ok(discovered.result.supportedVersions.includes('2026-07-28'));
   assert.equal(discovered.result._meta['io.modelcontextprotocol/serverInfo'].name, 'opengym');
   const modern = await rpc(alice.access_token, 'tools/list', {}, '2026-07-28');
   assert.equal(modern.status, 200);
-  assert.equal((await mcpJson(modern)).result.tools.length, 16);
+  assert.equal((await mcpJson(modern)).result.tools.length, 19);
   assert.equal(modern.headers.get('mcp-session-id'), null);
   assert.deepEqual(list.result.tools.find(tool => tool.name === 'nutrition_create_entry')._meta.securitySchemes,
     [{ type: 'oauth2', scopes: ['nutrition.write'] }]);
