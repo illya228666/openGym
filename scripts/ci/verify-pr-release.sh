@@ -2,9 +2,9 @@
 # Deny direct pushes, unverified merges or merges with source trees differing from the tested PR.
 set -euo pipefail
 die() { echo "::error::$*" >&2; exit 1; }
-: "$${GITHUB_REPOSITORY:?}"
-: "$${GITHUB_SHA:?}"
-: "$${GH_TOKEN:?}"
+: "${GITHUB_REPOSITORY:?}"
+: "${GITHUB_SHA:?}"
+: "${GH_TOKEN:?}"
 [[ "${GITHUB_EVENT_NAME:-}" == push && "${GITHUB_REF:-}" == refs/heads/main ]] ||
     die "Release check is main-push only."
 
