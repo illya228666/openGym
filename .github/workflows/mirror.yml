@@ -16,9 +16,7 @@
 name: Mirror to GitLab
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
+  # This fork uses ci.yml. Keep upstream-only workflow dormant on normal pushes/PRs.
   workflow_dispatch:
 
 permissions:

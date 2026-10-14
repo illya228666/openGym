@@ -11,11 +11,7 @@
 name: Deploy demo to GitHub Pages
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/pages.yml'
+  # This fork uses ci.yml. Keep upstream-only workflow dormant on normal pushes/PRs.
   workflow_dispatch:
 
 permissions:
