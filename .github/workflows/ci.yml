@@ -1,5 +1,5 @@
 name: OpenGym CI and GHCR
-run-name: ${{ github.event_name == 'pull_request' && 'PR verification — NOT DEPLOYED' || github.ref == 'refs/heads/main' && 'Release main — build and publish' || 'Manual verification — no publish' }}
+run-name: ${{ github.event_name == 'pull_request' && 'PR verification — NOT DEPLOYED' || github.ref == 'refs/heads/main' && 'Release main — package verified code' || 'Manual verification — no publish' }}
 
 on:
   push:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   test:
-    if: github.repository == 'illya228666/openGym'
+    if: github.repository == 'illya228666/openGym' && github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -26,6 +26,7 @@ jobs:
       - name: Check deployment transaction without production access
         run: |
           bash -n deploy/opengym-deploy
+          bash -n scripts/ci/verify-pr-release.sh
           python3 deploy/test_deploy.py
       - uses: actions/setup-node@v7
         with:
@@ -69,6 +70,7 @@ jobs:
       - run: node scripts/build-api-docs.mjs --check
 
   images:
+    if: github.repository == 'illya228666/openGym' && github.event_name != 'push'
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -145,26 +147,27 @@ jobs:
           docker logs api || true
           docker logs web || true
           docker logs nutrition || true
-      - name: Log in to GHCR (main only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish the images that passed smoke checks (main only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # Immutable evidence that the exact checkout completed all tests and smoke checks.
+      - name: Attest PR Git tree
+        if: github.event_name == 'pull_request'
         env:
-          SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          for image in api web nutrition; do
-            remote="ghcr.io/illya228666/opengym-$image"
-            docker tag "opengym-$image:ci" "$remote:sha-$SHA"
-            docker tag "opengym-$image:ci" "$remote:latest"
-            docker push "$remote:sha-$SHA"
-            docker push "$remote:latest"
-          done
-      # PR images are disposable checks only. Only main SHA images can be published for CD.
+          {
+            printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+            printf 'head=%s\n' "$PR_HEAD"
+            printf 'pr=%s\n' "$PR_NUMBER"
+          } > verified-pr-tree.txt
+      - name: Upload successful PR tree
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-pr-${{ github.event.pull_request.number }}
+          path: verified-pr-tree.txt
+          if-no-files-found: error
+          retention-days: 14
+      # PR images are tested but disposable; publishing targets only main-SHA builds.
       - name: Explain release state
         if: success()
         run: |
@@ -172,7 +175,7 @@ jobs:
             {
               echo "### ✅ PR checks passed — NOT DEPLOYED"
               echo "All three container images were built and tested, but **not published**."
-              echo "**Next step: merge this PR into \`main\`.** The new main commit triggers a separate verified release and Proxmox CD."
+              echo "**Next step: merge this PR into \`main\`.** Release verifies this exact Git tree, packages it under the main SHA and publishes it without re-running tests."
             } >> "$GITHUB_STEP_SUMMARY"
           elif [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
             {
@@ -189,3 +192,88 @@ jobs:
           docker rm -f web api nutrition || true
           docker volume rm opengym-ci-nutrition || true
           docker network rm opengym-ci || true
+
+  # A main push can publish only code whose exact source tree passed complete PR CI.
+  # Building again gives the OCI revision labels required by the existing Proxmox CD.
+  publish:
+    if: github.repository == 'illya228666/openGym' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - name: Gate release on successful PR smoke and identical Git tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/verify-pr-release.sh
+      - uses: docker/setup-buildx-action@v4
+      - name: Package API (no re-test)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./api/Dockerfile
+          target: default
+          load: true
+          tags: opengym-api:release
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+          labels: org.opencontainers.image.source=https://github.com/illya228666/openGym
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=main-${{ github.sha }}
+      - name: Package Web (no re-test)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./web/Dockerfile
+          load: true
+          tags: opengym-web:release
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+          labels: org.opencontainers.image.source=https://github.com/illya228666/openGym
+          build-args: |
+            APP_BUILD=${{ github.sha }}
+            VCS_REF=${{ github.sha }}
+            VERSION=main-${{ github.sha }}
+      - name: Package Nutrition (no re-test)
+        uses: docker/build-push-action@v7
+        with:
+          context: ./nutrition
+          file: ./nutrition/Dockerfile
+          load: true
+          tags: opengym-nutrition:release
+          cache-from: type=gha,scope=nutrition
+          cache-to: type=gha,mode=max,scope=nutrition
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=main-${{ github.sha }}
+      - name: Log in to GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish packages validated by PR
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          for image in api web nutrition; do
+            remote="ghcr.io/illya228666/opengym-$image"
+            docker tag "opengym-$image:release" "$remote:sha-$SHA"
+            docker tag "opengym-$image:release" "$remote:latest"
+            docker push "$remote:sha-$SHA"
+            docker push "$remote:latest"
+          done
+      - name: Summarize release
+        run: |
+          {
+            echo "### Verified release published"
+            echo "Main \`$GITHUB_SHA\` matches the exact source tree tested by the successful PR."
+            echo "No duplicate unit tests or integration smoke were executed."
+            echo "All three images are in GHCR; Proxmox deployment is independent."
+          } >> "$GITHUB_STEP_SUMMARY"

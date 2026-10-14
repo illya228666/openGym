@@ -22,8 +22,11 @@ new inbound webhook, runner, SSH port, registry token or GitHub deployment secre
 `opengym-deploy.timer` invokes `/usr/local/sbin/opengym-deploy` ten minutes
 after the preceding run finishes. The script reads the current `main` SHA and
 requires a successful **push** run of `.github/workflows/ci.yml` for that exact
-SHA. This workflow tests and smoke-checks the containers before publishing
-**all three** images. Failed/incomplete CI, partial publication or a missing
+SHA. Before release, a PR runs full tests plus the 3-container integration smoke and
+attests its checked-out Git tree. The main release must verify a merged PR with a
+successful PR CI result for the **identical tree**, then builds and publishes the
+three main-SHA-labelled Docker images without repeating tests or smoke checks.
+Direct pushes, failed PRs and mismatched Git trees cannot publish. Failed/incomplete CI, partial publication or a missing
 image never changes the running release. `latest` is not used by CD.
 
 All images use `sha-<full SHA>` and must have that SHA in their OCI revision
