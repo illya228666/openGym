@@ -9,7 +9,11 @@ import { createMcpOAuth } from '../mcp-oauth.js';
 import { createMetadataFetch } from '../mcp-clients.js';
 import { documentUrl, clientDocument, metadataTransport } from './mcp-metadata-fixture.mjs';
 
-test('CIMD discovery, OpenGym login, consent, token exchange and revocation need no registered client', async t => {
+for (const scenario of [
+  { label: 'read-only', scopes: ['training.read'] },
+  { label: 'full access', scopes: ['training.read', 'nutrition.read', 'nutrition.write'] }
+])
+test('CIMD consent permits only the validated callback origin and requested scopes (' + scenario.label + ')', async t => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'gym-cimd-'));
   let oauth; let fetches = 0;
   const json = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -31,7 +35,7 @@ test('CIMD discovery, OpenGym login, consent, token exchange and revocation need
   assert.equal(metadata.client_id_metadata_document_supported, true);
   assert.equal(metadata.registration_endpoint, origin + '/oauth/reg');
   const verifier = crypto.randomBytes(32).toString('base64url');
-  const params = { client_id: documentUrl, redirect_uri: 'https://client.example/callback', scope: 'training.read offline_access',
+  const params = { client_id: documentUrl, redirect_uri: 'https://client.example/callback', scope: scenario.scopes.join(' ') + ' offline_access',
     response_type: 'code', resource: origin + '/mcp', state: 'state',
     code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' };
   const jar = new Map();
@@ -43,8 +47,10 @@ test('CIMD discovery, OpenGym login, consent, token exchange and revocation need
     }
     return response;
   };
-  const rejected = await call('/oauth/auth?' + new URLSearchParams({ ...params, redirect_uri: 'https://evil.example/callback' }));
-  assert.equal(rejected.status, 400); assert.equal(rejected.headers.get('location'), null);
+  for (const redirect of ['https://evil.example/callback', 'https://client.example/not-registered', 'https://client.example/callback?unexpected=1']) {
+    const rejected = await call('/oauth/auth?' + new URLSearchParams({ ...params, redirect_uri: redirect }));
+    assert.equal(rejected.status, 400); assert.equal(rejected.headers.get('location'), null);
+  }
   let response = await browser('/oauth/auth?' + new URLSearchParams(params));
   let code; let unsignedSeen = false;
   for (let step = 0; step < 12; step++) {
@@ -55,6 +61,10 @@ test('CIMD discovery, OpenGym login, consent, token exchange and revocation need
     }
     if (location) { const next = new URL(location, origin); response = await browser(next.pathname + next.search); continue; }
     const html = await response.text(); assert.equal(response.status, 200, html);
+    assert.equal(response.headers.get('content-security-policy'),
+      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://client.example; frame-ancestors 'none'");
+    for (const scope of scenario.scopes) assert.ok(html.includes('<li>' + scope + '</li>'));
+    if (!scenario.scopes.includes('nutrition.write')) assert.ok(!html.includes('<li>nutrition.write</li>'));
     if (!unsignedSeen) {
       assert.match(html, /Sign in to/); assert.doesNotMatch(html, /<form/);
       unsignedSeen = true; jar.set('opengym', 'alice'); response = await browser(new URL(response.url).pathname); continue;
@@ -73,7 +83,9 @@ test('CIMD discovery, OpenGym login, consent, token exchange and revocation need
   assert.equal(exchanged.status, 200, await exchanged.clone().text());
   const tokens = await exchanged.json();
   assert.equal((await oauth.verify(tokens.access_token, 'training.read')).user.id, 'alice');
-  await assert.rejects(oauth.verify(tokens.access_token, 'nutrition.write'), { status: 403 });
+  if (scenario.scopes.includes('nutrition.write')) {
+    assert.deepEqual((await oauth.verify(tokens.access_token, 'nutrition.write')).scopes, scenario.scopes);
+  } else await assert.rejects(oauth.verify(tokens.access_token, 'nutrition.write'), { status: 403 });
   const grant = oauth.grants('alice')[0]; assert.equal(grant.clientId, documentUrl);
   assert.equal(grant.clientName, 'Compatible client');
   oauth = createMcpOAuth(options);

@@ -32,7 +32,7 @@ export function createHttpMcp({ oauth, readState, requestNutrition, json, takeBu
   return {
     close: () => handler.close(),
     async handle(req, res) {
-      const challenge = `Bearer resource_metadata="${oauth.resource.origin}/.well-known/oauth-protected-resource", scope="${McpReadScopes}"`
+      const challenge = `Bearer resource_metadata="${oauth.resource.origin}/.well-known/oauth-protected-resource", scope="${McpConnectionScopes}"`
       if (req.headers.host !== oauth.resource.host || (req.headers.origin && req.headers.origin !== oauth.resource.origin))
         return json(res, 403, { error: 'invalid_origin' })
       const token = /^Bearer ([^\s]+)$/.exec(req.headers.authorization || '')?.[1]
@@ -50,4 +50,4 @@ export function createHttpMcp({ oauth, readState, requestNutrition, json, takeBu
     }
   }
 }
-const McpReadScopes = 'training.read nutrition.read'
+const McpConnectionScopes = 'training.read nutrition.read nutrition.write'

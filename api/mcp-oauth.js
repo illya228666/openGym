@@ -154,8 +154,10 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
         const csrf = crypto.randomBytes(24).toString('base64url');
         store.set('OpenGymConsent', details.uid, { csrf, userId: user?.id || null }, 600);
         const scopes = String(details.params.scope || '').split(' ').filter(scope => McpScopes.includes(scope));
+        // Chrome checks form redirects too; allow only the callback origin already validated by OAuth.
+        const callbackOrigin = new URL(details.params.redirect_uri).origin;
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
-          'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'", 'X-Frame-Options': 'DENY' });
+          'Content-Security-Policy': `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${callbackOrigin}; frame-ancestors 'none'`, 'X-Frame-Options': 'DENY' });
         res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>OpenGym access</title><style>body{font:18px system-ui;max-width:38rem;margin:3rem auto;padding:1rem}button{padding:.7rem;margin:.5rem}li{margin:.5rem}</style><h1>Connect OpenGym</h1><p>Client: ${escapeHtml(details.params.client_id)}</p><p>Callback: ${escapeHtml(details.params.redirect_uri)}</p><p>${user ? 'Account: ' + escapeHtml(user.name) : `Sign in to <a href="${escapeHtml(resource.origin + prefix + '/') }" target="_blank" rel="noopener">OpenGym</a>, then reload this page.`}</p><ul>${scopes.map(scope => `<li>${escapeHtml(scope)}</li>`).join('')}</ul>${user ? `<form method="post"><input type="hidden" name="csrf" value="${csrf}"><button name="decision" value="allow">Allow access</button><button name="decision" value="deny">Cancel</button></form>` : ''}</html>`);
         return true;
       }

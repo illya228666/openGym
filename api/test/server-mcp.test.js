@@ -91,6 +91,7 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
   const unauthenticated = await request('/mcp', { method: 'POST', headers: { Cookie: 'gymsid=' + mint('alice') } });
   assert.equal(unauthenticated.status, 401);
   assert.match(unauthenticated.headers.get('www-authenticate'), /oauth-protected-resource/);
+  assert.match(unauthenticated.headers.get('www-authenticate'), /scope="training.read nutrition.read nutrition.write"/);
   const discovery = await request('/.well-known/oauth-authorization-server');
   const metadata = await discovery.json();
   assert.deepEqual(metadata.code_challenge_methods_supported, ['S256']);
@@ -160,6 +161,8 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
       }
       const html = await response.text();
       assert.equal(response.status, 200, response.url + '\n' + html + '\n' + log);
+      assert.equal(response.headers.get('content-security-policy'),
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://client.example; frame-ancestors 'none'");
       const csrf = /name="csrf" value="([^"]+)"/.exec(html)?.[1];
       assert.ok(csrf, html);
       response = await fetchBrowser(new URL(response.url).pathname, { method: 'POST', headers: {

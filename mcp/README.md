@@ -47,6 +47,12 @@ docker build -f api/Dockerfile .
 3. Add that URL as an OAuth MCP connection in ChatGPT or another compatible client. Leave manual client ID/secret fields empty; registration is automatic.
 4. Sign in to the existing OpenGym account and approve the requested permissions.
 
+The initial connection challenge requests `training.read`, `nutrition.read` and
+`nutrition.write`; all three are shown on the consent page. Registration does not
+grant these permissions automatically, and existing read-only grants are not upgraded.
+Consent CSP permits only the already validated callback origin alongside `'self'`,
+so Chrome can follow the form's OAuth redirect without allowing arbitrary destinations.
+
 The switch is persisted atomically in `data/mcp-settings.json` and applies immediately.
 No .env edits or container restarts are needed. A fresh deployment uses its existing
 OpenGym `ORIGIN` plus `/mcp`. Existing `MCP_PUBLIC_URL`, predefined clients and version-1
