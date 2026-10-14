@@ -1,10 +1,11 @@
-name: Fork CI and GHCR
+name: OpenGym CI and GHCR
+run-name: ${{ github.event_name == 'pull_request' && 'PR verification — NOT DEPLOYED' || github.ref == 'refs/heads/main' && 'Release main — build and publish' || 'Manual verification — no publish' }}
 
 on:
   push:
-    branches: [dev, main]
+    branches: [main]
   pull_request:
-    branches: [dev, main]
+    branches: [main]
   # Manual validation never publishes; publishing requires a push to main.
   workflow_dispatch:
 
@@ -163,6 +164,25 @@ jobs:
             docker push "$remote:sha-$SHA"
             docker push "$remote:latest"
           done
+      # PR images are disposable checks only. Only main SHA images can be published for CD.
+      - name: Explain release state
+        if: success()
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            {
+              echo "### ✅ PR checks passed — NOT DEPLOYED"
+              echo "All three container images were built and tested, but **not published**."
+              echo "**Next step: merge this PR into \`main\`.** The new main commit triggers a separate verified release and Proxmox CD."
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            {
+              echo "### ✅ Main release published to GHCR"
+              echo "Images for commit \`$GITHUB_SHA\` are available for automatic Proxmox CD."
+              echo "Publication does **not** prove that the server has deployed them; check the deployment status separately."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ✅ Manual checks passed — no images published" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Clean up smoke containers
         if: always()
         run: |
