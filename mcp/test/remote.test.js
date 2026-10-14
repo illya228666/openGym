@@ -5,6 +5,21 @@ import { createNutritionTools } from '../src/nutrition.js'
 import http from 'node:http'
 import { createHttpMcp } from '../src/http.js'
 
+test('HTTP MCP requests all three scopes before accepting OAuth tokens', async ({ onTestFinished }) => {
+  let entrance
+  const listener = http.createServer((req, res) => entrance.handle(req, res))
+  await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${listener.address().port}`
+  entrance = createHttpMcp({ oauth: { resource: new URL(base + '/mcp') }, readState: () => null,
+    requestNutrition: () => {}, takeBudget: () => 0,
+    json: (res, status, body, headers) => { res.writeHead(status, { 'Content-Type': 'application/json', ...headers }); res.end(JSON.stringify(body)) } })
+  onTestFinished(async () => { await entrance.close(); listener.closeAllConnections(); await new Promise(resolve => listener.close(resolve)) })
+  const response = await fetch(base + '/mcp', { headers: { Cookie: 'gymsid=ordinary-session' } })
+  expect(response.status).toBe(401)
+  expect(await response.json()).toEqual({ error: 'invalid_token' })
+  expect(response.headers.get('www-authenticate')).toBe(`Bearer resource_metadata="${base}/.well-known/oauth-protected-resource", scope="training.read nutrition.read nutrition.write"`)
+})
+
 test('request-scoped training preserves same-ID custom exercise ownership', async () => {
   const state = name => ({ unit: 'kg', routines: [{ id: 'r', name: 'Routine', ex: [{ id: 'custom', sets: 3, reps: 8 }] }],
     customEx: [{ id: 'custom', n: name, bp: 'chest' }], workouts: [] })

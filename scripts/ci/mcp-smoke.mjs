@@ -26,6 +26,9 @@ const toggle = async enabled => {
 }
 assert.equal((await call('/mcp')).status, 404)
 await toggle(true)
+const initialChallenge = await call('/mcp')
+assert.equal(initialChallenge.status, 401)
+assert.match(initialChallenge.headers.get('www-authenticate'), /scope="training.read nutrition.read nutrition.write"/)
 const name = 'MCP CI ' + crypto.randomUUID().slice(0, 8)
 let cookie = await registerAccount(name)
 // Exercise existing OpenGym password sign-in, not a manufactured session.
@@ -71,6 +74,8 @@ for (let step = 0; step < 12; step++) {
   }
   const html = await response.text()
   assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-security-policy'),
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://client.example; frame-ancestors 'none'")
   const csrf = /name="csrf" value="([^"]+)"/.exec(html)?.[1]
   assert.ok(csrf)
   response = await browser(new URL(response.url).pathname, { method: 'POST',
