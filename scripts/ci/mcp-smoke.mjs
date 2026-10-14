@@ -74,8 +74,14 @@ for (let step = 0; step < 12; step++) {
   }
   const html = await response.text()
   assert.equal(response.status, 200)
-  assert.equal(response.headers.get('content-security-policy'),
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://client.example; frame-ancestors 'none'")
+  // The Node consent policy is forwarded through nginx, which adds its own
+  // frame-ancestors policy. Fetch combines both CSP headers with a comma.
+  const consentPolicy = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://client.example; frame-ancestors 'none'"
+  const receivedPolicy = response.headers.get('content-security-policy')
+  assert.ok(
+    receivedPolicy === consentPolicy || receivedPolicy === consentPolicy + ", frame-ancestors 'none'",
+    'Unexpected consent Content-Security-Policy: ' + receivedPolicy
+  )
   const csrf = /name="csrf" value="([^"]+)"/.exec(html)?.[1]
   assert.ok(csrf)
   response = await browser(new URL(response.url).pathname, { method: 'POST',
