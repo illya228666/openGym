@@ -24,7 +24,7 @@ export default {
   "Calendar timezone": "Часовой пояс дат",
   "Training today uses the server timezone. Nutrition requires an explicit local date.": "«Сегодня» для тренировок определяется часовым поясом сервера. Для питания указывайте явную локальную дату.",
   "Your MCP connections": "Ваши подключения MCP",
-  "Only your connections are shown. Signing out everywhere also revokes MCP access.": "Показаны только ваши подключения. Выход на всех устройствах также отзывает доступ MCP.",
+  "Connections stay active until you revoke access here. Signing out of OpenGym does not disconnect them.": "Подключения действуют, пока вы не отзовёте доступ здесь. Выход из OpenGym не отключает их.",
   "No MCP connections yet.": "Подключений MCP пока нет.",
   "Reload": "Обновить",
   "Connect ChatGPT or another MCP client": "Подключить ChatGPT или другой MCP-клиент",

@@ -79,7 +79,7 @@ export default function McpSettings() {
         {signedIn && user.admin && <p className="muted small">{t('The switch applies immediately. Turning MCP off preserves connections but blocks new requests.')}</p>}
       </div>
     </Section>
-    {loaded && <Section title={t('Your MCP connections')} footer={t('Only your connections are shown. Signing out everywhere also revokes MCP access.')}>
+    {loaded && <Section title={t('Your MCP connections')} footer={t('Connections stay active until you revoke access here. Signing out of OpenGym does not disconnect them.')}>
       {!loaded.connections.length ? <Row title={t('No MCP connections yet.')} /> : loaded.connections.map(grant =>
         <Row key={grant.grantId} icon="shield" title={grant.clientName || grant.clientId}
           subtitle={<><span className="mcp-value" dir="ltr">{grant.clientId}</span><br />

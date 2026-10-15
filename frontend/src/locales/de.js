@@ -24,7 +24,7 @@ export default {
   "Calendar timezone": "Zeitzone für Datumsangaben",
   "Training today uses the server timezone. Nutrition requires an explicit local date.": "Heute gilt beim Training in der Serverzeitzone. Ernährung benötigt ein ausdrücklich angegebenes lokales Datum.",
   "Your MCP connections": "Deine MCP-Verbindungen",
-  "Only your connections are shown. Signing out everywhere also revokes MCP access.": "Nur deine Verbindungen werden angezeigt. Überall abmelden widerruft auch den MCP-Zugriff.",
+  "Connections stay active until you revoke access here. Signing out of OpenGym does not disconnect them.": "Verbindungen bleiben aktiv, bis du den Zugriff hier widerrufst. Die Abmeldung von OpenGym trennt sie nicht.",
   "No MCP connections yet.": "Noch keine MCP-Verbindungen.",
   "Reload": "Neu laden",
   "Connect ChatGPT or another MCP client": "ChatGPT oder einen anderen MCP-Client verbinden",

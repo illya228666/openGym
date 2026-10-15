@@ -16,6 +16,68 @@ test('registered OAuth clients remain durable beyond grant expiry', async t => {
   assert.equal((await new restarted.Adapter('Client').find('client')).client_id, 'client');
 });
 
+test('persistent OAuth grants survive inactivity while consumed refresh history expires at 30 days', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'gym-oauth-persistent-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'oauth.json');
+  let store = createOAuthStore(file, 'secret');
+  const now = Date.now();
+  let elapsed = 0;
+  t.mock.method(Date, 'now', () => now + elapsed);
+  store.set('OpenGymGrant', 'grant', { grantId: 'grant', userId: 'alice', persistent: true }, null);
+  await new store.Adapter('Grant').upsert('grant', { accountId: 'alice', exp: 1 }, 1);
+  const refresh = new store.Adapter('RefreshToken');
+  await refresh.upsert('used', { grantId: 'grant', exp: 1 }, 1);
+  await refresh.upsert('current', { grantId: 'grant', exp: 1 }, 1);
+  await refresh.consume('used');
+  elapsed = 30 * 86400000 - 1;
+  store = createOAuthStore(file, 'secret');
+  assert.ok((await new store.Adapter('RefreshToken').find('used')).consumed);
+  elapsed++;
+  assert.equal(await new store.Adapter('RefreshToken').find('used'), undefined);
+  elapsed = 100 * 365 * 86400000;
+  store = createOAuthStore(file, 'secret');
+  assert.equal(store.get('Grant', 'grant').exp, undefined);
+  assert.equal(store.get('RefreshToken', 'current').grantId, 'grant');
+  assert.equal(store.get('RefreshToken', 'current').exp, undefined);
+  assert.equal(store.list('OpenGymGrant').length, 1);
+  store.revoke('grant');
+  assert.equal(store.get('RefreshToken', 'current'), undefined);
+  assert.equal(createOAuthStore(file, 'secret').get('Grant', 'grant'), undefined);
+});
+
+test('legacy migration preserves only live authorized connections without reviving old tokens or scopes', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'gym-oauth-migration-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'oauth.json');
+  let store = createOAuthStore(file, 'secret');
+  for (const id of ['live', 'session-revoked', 'expired', 'expired-payload', 'missing-grant']) {
+    const seconds = id === 'expired' ? -1 : 600;
+    store.set('Grant', id, { accountId: 'alice', exp: Math.floor(Date.now() / 1000) + seconds }, seconds);
+    store.set('OpenGymGrant', id, { grantId: id, userId: 'alice', sessionVersion: 0, scopes: ['training.read'] }, seconds);
+    store.set('RefreshToken', id, { grantId: id, exp: Math.floor(Date.now() / 1000) + seconds }, seconds);
+  }
+  store.set('Grant', 'expired-payload', { accountId: 'alice', exp: 1 }, 600);
+  store.remove('Grant', 'missing-grant');
+  store.set('RefreshToken', 'old-expired', { grantId: 'live', exp: 1 }, -1);
+  store.set('RefreshToken', 'consumed', { grantId: 'live', consumed: 1, exp: 2 }, 600);
+  store = createOAuthStore(file, 'secret', binding => binding.grantId !== 'session-revoked');
+  assert.equal(store.get('OpenGymGrant', 'live').persistent, true);
+  assert.deepEqual(store.get('OpenGymGrant', 'live').scopes, ['training.read']);
+  assert.equal(store.get('OpenGymGrant', 'session-revoked').persistent, undefined);
+  assert.equal(store.get('OpenGymGrant', 'missing-grant').persistent, undefined);
+  assert.equal(store.get('OpenGymGrant', 'expired-payload').persistent, undefined);
+  assert.equal(store.get('OpenGymGrant', 'expired'), undefined);
+  assert.equal(store.get('RefreshToken', 'old-expired'), undefined);
+  assert.equal(store.get('RefreshToken', 'consumed').exp, 2);
+  const now = Date.now(); t.mock.method(Date, 'now', () => now + 31 * 86400000);
+  store = createOAuthStore(file, 'secret');
+  assert.equal(store.get('Grant', 'live').exp, undefined);
+  assert.equal(store.get('RefreshToken', 'live').exp, undefined);
+  assert.equal(store.get('RefreshToken', 'session-revoked'), undefined);
+  assert.equal(store.get('OpenGymGrant', 'missing-grant'), undefined);
+});
+
 test('OAuth artifacts survive restart encrypted and revoke as one grant', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'gym-oauth-store-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

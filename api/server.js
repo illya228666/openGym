@@ -2589,14 +2589,15 @@ async function mcpConnectionStore() {
     // Reuse the provider's store while running; disabled MCP still permits own-grant revocation.
     if (!mcpStore) mcpStore = mcpOAuth?.store || createOAuthStore(path.join(DATA, 'mcp-oauth.json'), SECRET, binding => {
       const user = db.users.find(user => user.id === binding.userId);
-      return !!user && !user.disabled && (user.sv || 0) === binding.sessionVersion;
+      return !!user && !user.disabled && (binding.persistent || (user.sv || 0) === binding.sessionVersion);
     });
   }
   return mcpStore;
 }
 async function mcpConnections(user) {
   return (await mcpConnectionStore()).list('OpenGymGrant')
-    .filter(grant => grant.userId === user.id && grant.sessionVersion === (user.sv || 0));
+    .filter(grant => grant.userId === user.id && !user.disabled
+      && (grant.persistent || grant.sessionVersion === (user.sv || 0)));
 }
 const mcpAuthBudget = createWindow({ max: 120, windowMs: 60000 });
 const mcpRegistrationBudget = createWindow({ max: 5, windowMs: 60000 });
