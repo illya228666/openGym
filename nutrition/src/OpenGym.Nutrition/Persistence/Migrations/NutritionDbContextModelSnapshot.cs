@@ -60,6 +60,9 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                     b.Property<decimal>("Protein")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ProvenanceJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal>("QuantityGrams")
                         .HasColumnType("TEXT");
 
@@ -81,9 +84,6 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("BrandSearchText")
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("Barcode")
                         .HasColumnType("TEXT");
 
@@ -91,10 +91,16 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("BrandSearchText")
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal>("Calories")
                         .HasColumnType("TEXT");
 
                     b.Property<decimal>("Carbohydrates")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CatalogKey")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ExternalId")
@@ -123,6 +129,9 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                     b.Property<decimal>("Protein")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ProvenanceJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTimeOffset?>("RetrievedAtUtc")
                         .HasColumnType("TEXT");
 
@@ -138,12 +147,35 @@ namespace OpenGym.Nutrition.Persistence.Migrations
 
                     b.HasKey("UserId", "Id");
 
+                    b.HasIndex("UserId", "CatalogKey")
+                        .IsUnique();
+
                     b.HasIndex("UserId", "IsDeleted");
 
                     b.HasIndex("UserId", "ExternalSource", "ExternalId")
                         .IsUnique();
 
                     b.ToTable("Products");
+                });
+
+            modelBuilder.Entity("OpenGym.Nutrition.Domain.ProductCreation", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("UserId", "Id");
+
+                    b.ToTable("ProductCreations");
                 });
 #pragma warning restore 612, 618
         }

@@ -60,3 +60,21 @@ test('external catalog gateway allowlists operations and preserves actionable so
     await assert.rejects(requestNutrition('GET', route), /Unsupported/);
   assert.equal(nutritionRoute('POST', '/api/nutrition/external/products/7622210449283'), null);
 });
+
+test('MCP custom product and reference search stay on allowlisted Nutrition operations', async t => {
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, options });
+    return new Response(JSON.stringify({ code: 'source_values_mismatch' }), { status: 400 });
+  });
+  await assert.rejects(requestNutrition('GET', '/api/nutrition/reference-foods',
+    { search: 'chicken&host=evil', userId: 'bob', offset: 10 }, undefined, 'ogn.read'), { code: 'source_values_mismatch' });
+  assert.equal(calls[0].url.pathname + calls[0].url.search, '/api/nutrition/reference-foods?search=chicken%26host%3Devil');
+  const body = { id: 'stable', source: { provider: 'usda', foodId: '171077' } };
+  await assert.rejects(requestNutrition('POST', '/api/nutrition/products', {}, body, 'ogn.write'), { code: 'source_values_mismatch' });
+  assert.deepEqual(JSON.parse(calls[1].options.body), body);
+  assert.equal(calls[1].options.headers.Authorization, 'Bearer ogn.write');
+  for (const path of ['/api/nutrition/reference-foods/anything', '/api/nutrition/reference-foods?url=http://localhost'])
+    await assert.rejects(requestNutrition('GET', path), /Unsupported Nutrition operation/);
+  assert.equal(calls.length, 2);
+});

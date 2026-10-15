@@ -8,9 +8,9 @@ if (!['http:', 'https:'].includes(target.protocol) || target.username || target.
 /** MCP uses the same HTTP service, with a short-lived operation-bound credential, never SQLite. */
 export async function requestNutrition(method, pathname, query = {}, body, credential) {
   const known = nutritionRoute(method, pathname)
-    || (method === 'GET' && ['/api/nutrition/products', '/api/nutrition/diary', '/api/nutrition/external/products'].includes(pathname))
+    || (method === 'GET' && ['/api/nutrition/products', '/api/nutrition/diary', '/api/nutrition/external/products', '/api/nutrition/reference-foods'].includes(pathname))
     || (method === 'POST' && pathname === '/api/nutrition/products/import')
-    || (method === 'POST' && pathname === '/api/nutrition/entries');
+    || (method === 'POST' && ['/api/nutrition/entries', '/api/nutrition/products'].includes(pathname));
   if (!known) throw new Error('Unsupported Nutrition operation');
   const url = new URL(pathname, base);
   for (const key of nutritionQuery(pathname))
@@ -66,6 +66,7 @@ export function nutritionRoute(method, pathname) {
 }
 
 export function nutritionQuery(pathname) {
+  if (pathname === '/api/nutrition/reference-foods') return ['search'];
   if (pathname === '/api/nutrition/products') return ['search', 'offset', 'brand', 'barcode', 'externalId', 'externalSource'];
   if (pathname === '/api/nutrition/external/products') return ['search', 'brand', 'barcode', 'page'];
   return pathname === '/api/nutrition/diary' ? ['date'] : [];

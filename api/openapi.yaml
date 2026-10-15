@@ -300,6 +300,38 @@ paths:
         '429': { description: external_rate_limited with retryAfterSeconds and Retry-After. }
         '502': { description: external_invalid_response. }
         '503': { description: external_unavailable or Nutrition/authentication/database unavailable. }
+  /api/nutrition/reference-foods:
+    get:
+      tags: [nutrition]
+      operationId: searchNutritionReferenceFoods
+      summary: Search non-branded USDA FoodData Central reference foods.
+      description: Authenticated search; candidates are not automatically a match to the meal. Null nutrients mean incomplete data, never zero-filled. Data are CC0 reference values, not exact measurements of the user's food.
+      parameters:
+        - in: query
+          name: search
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '200':
+          description: Up to ten non-branded candidates.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  foods:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        foodId: { type: string }
+                        description: { type: string }
+                        dataType: { type: string }
+                        url: { type: string, format: uri }
+                        per100Grams: { oneOf: [{ $ref: '#/components/schemas/NutritionValues' }, { type: 'null' }] }
+        '400': { description: Invalid search or incomplete upstream data. }
+        '401': { description: Authentication required. }
+        '503': { description: Source or service unavailable; retry later. }
   /api/nutrition/products:
     get:
       tags: [nutrition]
@@ -334,6 +366,11 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/NutritionProductInput' }
       responses:
+        '200':
+          description: Identical custom-product retry or deduplicated existing product; use the returned id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NutritionProduct' }
         '201':
           description: Successful user-scoped operation.
           content:
@@ -342,8 +379,8 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: 'No active item belongs to this user.' }
-        '409': { description: 'Entry creation id already used with a different payload.' }
-        '410': { description: 'A retried entry creation refers to a deleted entry.' }
+        '409': { description: 'Creation id conflict or modified existing custom product definition.' }
+        '410': { description: 'A retried custom product was deleted.' }
         '503': { description: 'Nutrition or authentication unavailable.' }
   /api/nutrition/products/{id}:
     parameters:
@@ -3468,7 +3505,35 @@ components:
         protein: { type: number, minimum: 0, maximum: 100, multipleOf: 0.001 }
         fat: { type: number, minimum: 0, maximum: 100, multipleOf: 0.001 }
         carbohydrates: { type: number, minimum: 0, maximum: 100, multipleOf: 0.001 }
-      description: All nutritional values are per 100 grams; up to 3 decimal places.
+        id: { type: string, format: uuid, description: 'POST only: durable creation key for custom products; reuse identical payload on retry.' }
+        source: { $ref: '#/components/schemas/NutritionFoodSourceInput' }
+        foodState: { type: string, enum: [raw, ready, cooked] }
+        cookingMethod: { type: string, enum: [cooked, roasted, baked, grilled, boiled, fried, air_fried, steamed, stewed, braised] }
+        confirmedPreparationAnalog: { type: boolean, default: false }
+      description: All values are per 100 grams, up to 3 decimals. Custom POST requires id, source and foodState together; cooked requires cookingMethod. Server fetches USDA and compares all values. Analogs require user confirmation; raw/cooked mismatches always fail. PUT is the existing manual edit and cannot set custom creation metadata; it marks prior provenance user_edited.
+    NutritionFoodSourceInput:
+      type: object
+      required: [provider, foodId, url]
+      properties:
+        provider: { type: string, enum: [usda] }
+        foodId: { type: string, pattern: '^[1-9][0-9]{0,8}$' }
+        url: { type: string, format: uri, description: 'Exact USDA food-details URL for foodId; never fetched as a caller-supplied target.' }
+    NutritionProvenance:
+      type: object
+      properties:
+        foodState: { type: string, enum: [raw, ready, cooked] }
+        cookingMethod: { oneOf: [{ type: string }, { type: 'null' }] }
+        preparationAnalog: { type: boolean }
+        source:
+          type: object
+          properties:
+            provider: { type: string }
+            foodId: { type: string }
+            url: { type: string, format: uri }
+            description: { type: string }
+            dataType: { type: string }
+            verificationStatus: { type: string, enum: [source_verified_reference, user_edited] }
+            verifiedAtUtc: { type: string, format: date-time }
     NutritionProduct:
       allOf:
         - { $ref: '#/components/schemas/NutritionProductInput' }
@@ -3476,6 +3541,7 @@ components:
           required: [id]
           properties:
             id: { type: string, format: uuid }
+            provenance: { oneOf: [{ $ref: '#/components/schemas/NutritionProvenance' }, { type: 'null' }] }
             externalSource: { type: [string, 'null'], description: 'openfoodfacts for imported products; null for legacy/manual products.' }
             externalId: { type: [string, 'null'] }
             barcode: { type: [string, 'null'] }
@@ -3551,6 +3617,7 @@ components:
         date: { type: string, format: date }
         time: { oneOf: [{ type: string }, { type: 'null' }] }
         per100Grams: { $ref: '#/components/schemas/NutritionValues' }
+        provenance: { oneOf: [{ $ref: '#/components/schemas/NutritionProvenance' }, { type: 'null' }] }
         nutrition: { $ref: '#/components/schemas/NutritionValues' }
     NutritionDiary:
       type: object

@@ -19,4 +19,5 @@ public sealed class DiaryEntry
     // Retain the original request and deletion marker so a late retry cannot recreate food.
     public string CreationFingerprint { get; set; } = "";
     public bool IsDeleted { get; set; }
+    public string? ProvenanceJson { get; set; }
 }

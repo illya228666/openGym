@@ -3,7 +3,7 @@
 Two entrances share the same tool registration and training handlers:
 
 - **Local stdio:** the original nine read-only training tools, using `OPENGYM_DATA` and `OPENGYM_UID`.
-- **Remote Streamable HTTP:** opt-in `/mcp` inside the existing Node API, with OAuth delegation and ten Nutrition API tools. No fourth application image, new account system or published internal port.
+- **Remote Streamable HTTP:** opt-in `/mcp` inside the existing Node API, with OAuth delegation and twelve Nutrition API tools. No fourth application image, new account system or published internal port.
 
 Training statistics still use the pure functions in `frontend/src/lib/`. Remote calls obtain the verified user's snapshot through Node's existing state reader, not an AI-supplied user ID. State is scoped to one request; custom exercise names cannot leak through a global registry. Nutrition uses its existing HTTP API, historical snapshots, decimal totals and retry rules. MCP never opens SQLite or calculates nutrients.
 
@@ -146,6 +146,8 @@ Remote-only Nutrition tools:
 | `nutrition_search_external_products` | Name `search`, `brand`, exact `barcode`, optional `page`; OFF candidates, not verified nutrition |
 | `nutrition_get_external_product` | Exact `external_id`; checked `per100Grams`, `canImport`, `issues` and `fingerprint` |
 | `nutrition_create_product` | `source: "openfoodfacts"`, `external_id`, `fingerprint`; imports or reuses a personal product without accepting model-supplied nutrients |
+| `nutrition_search_reference_foods` | English `search`; USDA non-branded candidates and complete per-100g values when available |
+| `nutrition_create_custom_product` | Stable `product_id` UUID, name/optional brand, complete nutrients, USDA `source`, `food_state`, optional `cooking_method`; independently verified and deduplicated by the API |
 | `nutrition_get_product` | `product_id` from catalog results |
 | `nutrition_get_diary` | Explicit local `date` (`YYYY-MM-DD`); entries and service-computed totals |
 | `nutrition_get_entry` | `entry_id`; inspect before edit/delete |
@@ -153,7 +155,16 @@ Remote-only Nutrition tools:
 | `nutrition_update_entry` | `entry_id`, complete quantity/date/time; optional intentional product replacement |
 | `nutrition_delete_entry` | Exact `entry_id` and `confirmed: true` after confirmation |
 
-Products contain values per 100 grams, not serving/piece weights. For “I ate 200 grams of buckwheat and two eggs,” search the user's catalog, clarify raw/cooked/brand ambiguity and obtain grams for eggs. Do not invent products or piece-to-grams conversions. A fully specified “record 200 g of this product on this date” needs no redundant confirmation. Each product is a separate write, so partly successful meals must be reported as partial, not atomic.
+Search the personal catalog first. If absent, search USDA, inspect food identity and
+preparation, create a verified custom product, then call `nutrition_create_entry`
+with its **returned ID** and eaten grams/date. Values are per 100 g, not serving/piece
+weights. Missing data must not become zeroes; do not substitute industrial products
+for homemade food or convert raw mass to cooked without known yields. Different
+cooking methods require user confirmation before `confirmed_preparation_analog: true`;
+raw/cooked mismatch cannot be overridden. Describe reference averages honestly, not
+as exact lab data for the meal. See [sources and limits](../docs/NUTRITION.md#verified-custom-foods-through-mcp).
+Fully specified entries need no redundant confirmation; ambiguity does. Product and
+entry writes are separate: report partial success if diary creation fails.
 
 For “I ate 40 g of Milka,” search the personal catalog first. If missing, search OFF and clarify the exact flavor/package when several plausible products match. Read the selected external ID; only `canImport: true` permits automatic import. Call `nutrition_create_product` with its fingerprint, then `nutrition_create_entry` with `quantity_grams: 40`, a stable entry UUID and the known local date. Once the identity and grams are clear, no extra confirmation is needed. Next time reuse the personal product, including when OFF is unavailable. A single search hit is not proof of identity; incomplete pagination must not conceal alternatives.
 
@@ -170,6 +181,7 @@ Existing `web → api → nutrition` remains intact. nginx proxies `/mcp` withou
 Reuse Cloudflare HTTPS. Do not cache dynamic routes or put interactive Access/challenge pages in front of MCP/token/discovery. Keep API/Nutrition ports internal. Cloudflare Tunnel can carry the same origin without extra origin ports. OpenAI Secure MCP Tunnel is not configured here; adding it later is a connectivity choice, not a different tool implementation.
 
 Nutrition receives a 60-second HMAC-signed internal credential bound to user, grant, session version, HTTP method and path. It revalidates with Node and compares the delegated method/path. No broad browser session is manufactured or forwarded. External lookup uses `nutrition.read`; import uses `nutrition.write`. MCP does not read SQLite, and OFF receives no user credentials or identifiers.
+Custom food creation also uses nutrition.write; USDA search uses nutrition.read. No additional scopes or catalog edit/delete tools are exposed.
 
 Artifacts/signing keys are stored separately in `data/mcp-oauth.json`, AES-256-GCM encrypted with a key derived from existing `data/secret`. Back up and restore **both together**; protect backups as credentials. Corruption/mismatched secret fails startup closed. Do not delete this file as a “repair”; old backups can resurrect grants and need deliberate revoke-all/session-version reset. OAuth assumes **one Node writer**, like current JSON storage; replace the adapter with transactional shared storage before multiple replicas. Expired rows are swept on writes and capacity is bounded.
 

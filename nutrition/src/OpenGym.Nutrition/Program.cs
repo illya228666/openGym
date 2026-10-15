@@ -49,6 +49,16 @@ builder.Services.AddHttpClient(OpenFoodFacts.ClientName, client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("OpenGym/0.2 (https://github.com/illya228666/openGym)");
     client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false });
+builder.Services.AddScoped<FoodCompositionClient>();
+// Like OFF, only trusted deployment configuration can redirect USDA to an isolated test fixture.
+var usdaOrigin = builder.Configuration["Nutrition:UsdaBaseUrl"] ?? "https://api.nal.usda.gov";
+if (!Uri.TryCreate(usdaOrigin, UriKind.Absolute, out var usdaUri)
+    || usdaUri.Scheme is not ("https" or "http") || !string.IsNullOrEmpty(usdaUri.UserInfo)
+    || usdaUri.AbsolutePath != "/" || !string.IsNullOrEmpty(usdaUri.Query) || !string.IsNullOrEmpty(usdaUri.Fragment))
+    throw new InvalidOperationException("Nutrition:UsdaBaseUrl must be a trusted HTTP(S) origin.");
+builder.Services.AddHttpClient(FoodCompositionClient.ClientName, client =>
+    { client.BaseAddress = usdaUri; client.Timeout = TimeSpan.FromSeconds(5); })
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 64 * 1024);
 
 var app = builder.Build();

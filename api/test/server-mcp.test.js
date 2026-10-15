@@ -195,16 +195,20 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
     assert.equal(result.result.structuredContent.routines[0].name, name);
   }
   const list = await mcpJson(await rpc(alice.access_token, 'tools/list'));
-  assert.equal(list.result.tools.length, 19);
+  assert.equal(list.result.tools.length, 21);
   const discovered = await mcpJson(await rpc(alice.access_token, 'server/discover', {}, '2026-07-28'));
   assert.ok(discovered.result.supportedVersions.includes('2026-07-28'));
   assert.equal(discovered.result._meta['io.modelcontextprotocol/serverInfo'].name, 'opengym');
   const modern = await rpc(alice.access_token, 'tools/list', {}, '2026-07-28');
   assert.equal(modern.status, 200);
-  assert.equal((await mcpJson(modern)).result.tools.length, 19);
+  assert.equal((await mcpJson(modern)).result.tools.length, 21);
   assert.equal(modern.headers.get('mcp-session-id'), null);
   assert.deepEqual(list.result.tools.find(tool => tool.name === 'nutrition_create_entry')._meta.securitySchemes,
     [{ type: 'oauth2', scopes: ['nutrition.write'] }]);
+  assert.deepEqual(list.result.tools.find(tool => tool.name === 'nutrition_create_custom_product')._meta.securitySchemes,
+    [{ type: 'oauth2', scopes: ['nutrition.write'] }]);
+  assert.deepEqual(list.result.tools.find(tool => tool.name === 'nutrition_search_reference_foods')._meta.securitySchemes,
+    [{ type: 'oauth2', scopes: ['nutrition.read'] }]);
   const denied = await mcpJson(await rpc(alice.access_token, 'tools/call', {
     name: 'nutrition_get_diary', arguments: { date: '2026-10-13' }
   }));

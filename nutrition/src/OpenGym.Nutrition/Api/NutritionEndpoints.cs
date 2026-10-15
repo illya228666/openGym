@@ -22,10 +22,17 @@ public static class NutritionEndpoints
             return result.Created ? Results.Created($"/api/nutrition/products/{result.Product.Id}", result.Product)
                 : Results.Ok(result.Product);
         });
+        api.MapGet("/reference-foods", (FoodCompositionClient source, string? search, CancellationToken ct) => source.Search(search, ct));
         api.MapGet("/products/{id:guid}", (ClaimsPrincipal user, NutritionService service, Guid id, CancellationToken ct) =>
             service.Product(UserId(user), id, ct));
         api.MapPost("/products", async (ClaimsPrincipal user, NutritionService service, ProductRequest request, CancellationToken ct) =>
         {
+            if (request.Id is not null || request.Source is not null || request.FoodState is not null
+                || request.CookingMethod is not null || request.ConfirmedPreparationAnalog)
+            {
+                var result = await service.CreateCustomProduct(UserId(user), request, ct);
+                return result.Created ? Results.Created($"/api/nutrition/products/{result.Product.Id}", result.Product) : Results.Ok(result.Product);
+            }
             var product = await service.SaveProduct(UserId(user), null, request, ct);
             return Results.Created($"/api/nutrition/products/{product.Id}", product);
         });
