@@ -6,12 +6,14 @@ namespace OpenGym.Nutrition.Api;
 public sealed record ProductRequest(string? Name, string? Brand, decimal? Calories,
     decimal? Protein, decimal? Fat, decimal? Carbohydrates, Guid? Id = null,
     FoodSourceRequest? Source = null, string? FoodState = null, string? CookingMethod = null,
-    bool ConfirmedPreparationAnalog = false);
+    bool ConfirmedPreparationAnalog = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DataOrigin = null);
 public sealed record FoodSourceRequest(string Provider, string FoodId, string Url);
 public sealed record FoodSource(string Provider, string FoodId, string Url, string Description,
-    string DataType, string VerificationStatus, DateTime VerifiedAtUtc);
-public sealed record ProductProvenance(FoodSource Source, string FoodState, string? CookingMethod,
-    bool PreparationAnalog);
+    string DataType, string VerificationStatus, DateTime? VerifiedAtUtc);
+// Default preserves old source-bearing provenance JSON; estimates do not need a Source.
+public sealed record ProductProvenance(FoodSource? Source, string FoodState, string? CookingMethod,
+    bool PreparationAnalog, string DataOrigin = "verified_reference");
 public sealed record ReferenceFood(string FoodId, string Description, string DataType, string Url, Nutrients? Per100Grams);
 public sealed record ReferenceFoodPage(IReadOnlyList<ReferenceFood> Foods);
 public sealed record CreateEntryRequest(Guid Id, Guid ProductId, decimal QuantityGrams, string? Date, string? Time);

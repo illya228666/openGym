@@ -4117,7 +4117,7 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <span class="ep-sum">All values are per 100 grams, up to 3 decimals.</span>
   </summary>
   <div class="ep-body">
-<p>Custom POST requires id, source and foodState together; cooked requires cookingMethod. Server fetches USDA and compares all values. Analogs require user confirmation; raw/cooked mismatches always fail. PUT is the existing manual edit and cannot set custom creation metadata; it marks prior provenance user_edited.</p>
+<p>Custom POST requires id and foodState; cooked requires cookingMethod. ai_estimate and user_provided require no external source, calls or additional confirmation. verified_reference requires source and independently checked USDA values, retaining its preparation checks. PUT remains the manual edit and sets prior provenance to user_provided. Existing retry keys and historical JSON remain compatible.</p>
 <div class="ptab">
   <div class="prow">
     <span class="p-name">name<em class="p-req" title="required">required</em></span>
@@ -4155,8 +4155,13 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <span class="p-desc">POST only: durable creation key for custom products; reuse identical payload on retry.</span>
   </div>
   <div class="prow">
+    <span class="p-name">dataOrigin</span>
+    <span class="p-type">&quot;verified_reference&quot; | &quot;ai_estimate&quot; | &quot;user_provided&quot;</span>
+    <span class="p-desc">If omitted: verified_reference with source, otherwise ai_estimate.</span>
+  </div>
+  <div class="prow">
     <span class="p-name">source</span>
-    <span class="p-type"><a href="#schema-NutritionFoodSourceInput">NutritionFoodSourceInput</a></span>
+    <span class="p-type"><a href="#schema-NutritionFoodSourceInput">NutritionFoodSourceInput</a> | null</span>
     <span class="p-desc"></span>
   </div>
   <div class="prow">
@@ -4216,6 +4221,11 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
 
 <div class="ptab">
   <div class="prow">
+    <span class="p-name">dataOrigin</span>
+    <span class="p-type">&quot;verified_reference&quot; | &quot;ai_estimate&quot; | &quot;user_provided&quot;</span>
+    <span class="p-desc">Old stored source-bearing provenance defaults to verified_reference.</span>
+  </div>
+  <div class="prow">
     <span class="p-name">foodState</span>
     <span class="p-type">&quot;raw&quot; | &quot;ready&quot; | &quot;cooked&quot;</span>
     <span class="p-desc"></span>
@@ -4232,42 +4242,7 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   </div>
   <div class="prow">
     <span class="p-name">source</span>
-    <span class="p-type">object</span>
-    <span class="p-desc"></span>
-  </div>
-  <div class="prow">
-    <span class="p-name">source.provider</span>
-    <span class="p-type">string</span>
-    <span class="p-desc"></span>
-  </div>
-  <div class="prow">
-    <span class="p-name">source.foodId</span>
-    <span class="p-type">string</span>
-    <span class="p-desc"></span>
-  </div>
-  <div class="prow">
-    <span class="p-name">source.url</span>
-    <span class="p-type">string <span class="p-hint">(uri)</span></span>
-    <span class="p-desc"></span>
-  </div>
-  <div class="prow">
-    <span class="p-name">source.description</span>
-    <span class="p-type">string</span>
-    <span class="p-desc"></span>
-  </div>
-  <div class="prow">
-    <span class="p-name">source.dataType</span>
-    <span class="p-type">string</span>
-    <span class="p-desc"></span>
-  </div>
-  <div class="prow">
-    <span class="p-name">source.verificationStatus</span>
-    <span class="p-type">&quot;source_verified_reference&quot; | &quot;user_edited&quot;</span>
-    <span class="p-desc"></span>
-  </div>
-  <div class="prow">
-    <span class="p-name">source.verifiedAtUtc</span>
-    <span class="p-type">string <span class="p-hint">(date-time)</span></span>
+    <span class="p-type">object | null</span>
     <span class="p-desc"></span>
   </div>
 </div>

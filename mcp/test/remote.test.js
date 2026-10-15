@@ -39,6 +39,23 @@ test('Custom food tools preserve provenance, stable creation IDs and returned de
   expect(calls).toHaveLength(4)
 })
 
+test('Custom estimates and user values do not need sources or extra confirmations', async () => {
+  const calls = []
+  const tool = createNutritionTools(async (...args) => { calls.push(args); return { id: args[3].id } })
+    .find(t => t.name === 'nutrition_create_custom_product')
+  const body = { product_id: 'a164d2ef-8b28-4db5-93ac-f06b721ef935', name: 'Air-fried chicken breast',
+    calories: 165, protein: 31, fat: 3.6, carbohydrates: 0, food_state: 'cooked', cooking_method: 'air_fried' }
+  for (const origin of ['ai_estimate', 'user_provided', undefined]) {
+    const input = { ...body, ...(origin ? { data_origin: origin } : {}) }
+    await tool.handler(z.object(tool.schema).strict().parse(input))
+    expect(calls.at(-1)).toEqual(['POST', '/api/nutrition/products', {}, { id: body.product_id, name: body.name,
+      brand: null, calories: 165, protein: 31, fat: 3.6, carbohydrates: 0, source: null,
+      ...(origin ? { dataOrigin: origin } : {}), foodState: 'cooked', cookingMethod: 'air_fried', confirmedPreparationAnalog: false }])
+  }
+  expect(calls).toHaveLength(3)
+  expect(() => z.object(tool.schema).strict().parse({ ...body, data_origin: 'laboratory' })).toThrow()
+})
+
 test('HTTP MCP requests all three scopes before accepting OAuth tokens', async ({ onTestFinished }) => {
   let entrance
   const listener = http.createServer((req, res) => entrance.handle(req, res))

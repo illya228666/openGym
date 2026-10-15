@@ -119,11 +119,46 @@ assert.equal((await call('/api/me', { headers: { Cookie: cookie } })).status, 20
 await toggle(true)
 assert.equal((await rpc('tools/list', {})).result.tools.length, 21)
 assert.equal((await tool('nutrition_search_products', {})).products.length, 0)
+if (process.argv.includes('--offline-estimates')) {
+  await tool('nutrition_search_reference_foods', { search: 'chicken breast' }, 'source_unavailable')
+  await tool('nutrition_get_external_product', { external_id: '7622210449283' }, 'external_unavailable')
+}
+const estimateArguments = { product_id: crypto.randomUUID(), name: 'Air-fried chicken breast without oil',
+  calories: 165, protein: 31, fat: 3.6, carbohydrates: 0, data_origin: 'ai_estimate',
+  food_state: 'cooked', cooking_method: 'air_fried' }
+const estimatedProduct = await tool('nutrition_create_custom_product', estimateArguments)
+assert.equal(estimatedProduct.provenance.dataOrigin, 'ai_estimate')
+assert.equal(estimatedProduct.provenance.source, null)
+assert.deepEqual(await tool('nutrition_create_custom_product', estimateArguments), estimatedProduct)
+const estimatedEntry = { entry_id: crypto.randomUUID(), product_id: estimatedProduct.id,
+  quantity_grams: 150, date: '2026-10-16' }
+const firstEstimate = await tool('nutrition_create_entry', estimatedEntry)
+assert.deepEqual(firstEstimate.nutrition, { calories: 247.5, protein: 46.5, fat: 5.4, carbohydrates: 0 })
+assert.equal(firstEstimate.provenance.dataOrigin, 'ai_estimate')
+assert.deepEqual(await tool('nutrition_create_entry', estimatedEntry), firstEstimate)
+assert.equal((await tool('nutrition_get_diary', { date: estimatedEntry.date })).entries.length, 1)
+const reusedEstimate = (await tool('nutrition_search_products', { search: estimateArguments.name })).products
+assert.equal(reusedEstimate.length, 1)
+assert.equal(reusedEstimate[0].id, estimatedProduct.id)
+assert.equal((await tool('nutrition_create_custom_product', { ...estimateArguments, product_id: crypto.randomUUID() })).id, estimatedProduct.id)
+await tool('nutrition_create_entry', { ...estimatedEntry, entry_id: crypto.randomUUID(), product_id: reusedEstimate[0].id })
+const repeatedDay = await tool('nutrition_get_diary', { date: estimatedEntry.date })
+assert.equal(repeatedDay.entries.length, 2)
+assert.equal(repeatedDay.totals.calories, 495)
+assert.equal((await tool('nutrition_search_products', { search: estimateArguments.name })).products.length, 1)
+console.log('MCP estimate scenario passed: empty catalog -> ai_estimate -> 150g -> diary -> product reuse without duplicates.')
+if (process.argv.includes('--offline-estimates')) {
+  const readOnlyToken = await authorize('nutrition.read')
+  const deniedEstimate = await rpc('tools/call', { name: 'nutrition_create_custom_product', arguments: estimateArguments }, 200, readOnlyToken)
+  assert.equal(deniedEstimate.result.structuredContent.code, 'insufficient_scope')
+  console.log('Offline estimate smoke passed through real OAuth, MCP and .NET with USDA and OFF unreachable.')
+  process.exit(0)
+}
 const customId = crypto.randomUUID()
 await tool('nutrition_create_custom_product', { product_id: customId, name: 'Rejected source',
   calories: 165, protein: 31.02, fat: 3.57, carbohydrates: 0, food_state: 'cooked', cooking_method: 'roasted',
   source: { provider: 'usda', food_id: '171077', url: 'http://169.254.169.254/private' } }, 'unsupported_source')
-assert.equal((await tool('nutrition_search_products', {})).products.length, 0)
+assert.equal((await tool('nutrition_search_products', {})).products.length, 1)
 // CI uses its existing external-catalog fixture. --with-usda selects an actual external-service check.
 let customArguments
 if (process.argv.includes('--with-usda') || process.argv.includes('--usda-fixture')) {

@@ -118,16 +118,31 @@ details, reads the selected OFF card, imports with its fingerprint and records a
 user-supplied grams. Unambiguous checked products need no redundant confirmation.
 Photos, portions/pieces, inferred weights and internal AI services are not included.
 
-## Verified custom foods through MCP
+## Custom foods through MCP
 
-After a personal catalog miss, `nutrition_search_reference_foods` calls authenticated
-`GET /api/nutrition/reference-foods?search=` with English food/preparation terms.
-`nutrition_create_custom_product` uses existing `POST /api/nutrition/products` with
-`id`, name/optional brand, complete per-100g calories/protein/fat/carbohydrates,
-`source: {provider: usda, foodId, url}`, `foodState` and optional `cookingMethod`.
-The server fetches USDA independently and compares all four values, rounded to three
-decimal places. It accepts Foundation, SR Legacy and Survey (FNDDS), not arbitrary
-branded substitutes for homemade food. Incomplete search values are null, never zero-filled.
+Search the personal catalog first and reuse a matching saved product, including an
+estimate. `nutrition_create_custom_product` uses existing `POST /api/nutrition/products`
+with `id`, name/optional brand, complete per-100g calories/protein/fat/carbohydrates,
+`foodState`, optional `cookingMethod` and `dataOrigin` (`data_origin` in MCP):
+
+- `ai_estimate`: reasonable AI estimates, clearly described as approximate.
+- `user_provided`: values supplied by the user.
+- `verified_reference`: values independently verified against USDA.
+
+AI and user values **do not need an external source or external requests**, including
+when USDA and OFF are completely unavailable. Ordinary delegated estimation does not
+require another confirmation, permission flag or trust score. Preserve the stated
+preparation, choose reasonable estimates and disclose their approximate nature after
+successfully logging the food. Estimates are not verified data.
+
+USDA and Open Food Facts are optional accuracy aids. To claim `verified_reference`,
+provide `source: {provider: usda, foodId, url}`; the server fetches USDA and compares all
+four values, rounded to three decimals, retaining preparation checks. Foundation,
+SR Legacy and Survey (FNDDS) are supported. For backward compatibility, omitted origin
+means verified_reference when source is supplied, otherwise ai_estimate. An optional
+USDA citation on an estimate is stored as unverified, without a verification timestamp
+or network lookup. `nutrition_search_reference_foods` remains available at authenticated
+`GET /api/nutrition/reference-foods?search=`; incomplete search values are null, not zero-filled.
 
 USDA data are [public domain / CC0](https://fdc.nal.usda.gov/api-guide/).
 `Nutrition__UsdaApiKey` optionally supplies a free data.gov key via `X-Api-Key`.
@@ -141,23 +156,28 @@ Additional sources need separate verification
 and licensing review, not a URL allow-all.
 
 `foodState`: raw/ready/cooked. Cooked requires `cookingMethod`: cooked (unspecified),
-roasted/baked/grilled/boiled/fried/air_fried/steamed/stewed/braised. A different method
-requires explicit user confirmation and `confirmedPreparationAnalog: true`; saved
+roasted/baked/grilled/boiled/fried/air_fried/steamed/stewed/braised. For verified reference
+claims only, a different method requires confirmation and `confirmedPreparationAnalog: true`; saved
 provenance records `preparationAnalog: true` alongside the original source description.
 Confirmation cannot override raw/cooked mismatch. Matching food identity, ingredients
 (including oil), brand, grams and date remains the client's job. Do not convert raw
 mass to cooked mass without known yields. Source verification proves reference values,
 not that the user's meal exactly equals that reference.
 
-Products and new entries expose source description, dataset type, URL, verification
-timestamp, preparation and `source_verified_reference` status: reference averages,
-**not exact lab measurements of the meal**. Manual edits mark product provenance
-`user_edited`. Entry nutrients and provenance are independent snapshots; existing
+Products and new entries expose provenance.dataOrigin, preparation and an optional source.
+Source-free estimates/user values have source=null, not fake source metadata.
+`source_verified_reference` is retained for verified USDA source metadata; these are
+reference averages, **not lab measurements of the meal**. Manual edits set dataOrigin
+to user_provided and, when a source exists, its status to user_edited.
+Legacy source-bearing JSON defaults to verified_reference, except old user_edited
+source metadata which is read as user_provided. Entry nutrients and provenance are independent snapshots; existing
 history is neither rewritten nor backfilled with invented sources.
 
 Custom creation saves the product and UUID retry key atomically. Reuse the same UUID
 and payload after a timeout; replay works even if USDA is offline. New keys for the
-same per-user source/brand/preparation reuse the existing product and persist aliases.
+same per-user reference/brand/preparation reuse the existing product and persist aliases.
+Estimates/user values deduplicate by normalized name, brand, preparation and origin;
+reuse returns the existing values rather than silently replacing them with a new estimate.
 Use the **returned ID** for `nutrition_create_entry`. Conflicting keys return 409;
 deleted products return 410 and are not resurrected. Manual products without sources
 are not merged just because names look similar. After successful creation, save eaten
@@ -165,13 +185,20 @@ grams/date with a stable entry UUID. A fresh independent UUID is a new operation
 check the diary and clarify if a natural-language command might be a retry or another
 identical meal. Report partial success when product creation succeeds but diary fails.
 
-Missing/unsupported sources, missing nutrients, mismatched values, unconfirmed analogs
-or unavailable USDA stop automatic creation; never guess values. Existing CI uses
+Missing nutrients still fail basic numeric validation. Missing/unsupported sources,
+mismatched values, unconfirmed analogs or unavailable USDA reject verified claims only;
+the client can instead save clearly labeled estimated/user values without source checks.
+No automatic relabeling presents a failed verification as a verified product. Existing CI uses
 the existing catalog-fixture container for both OFF and USDA (`--usda-fixture`) and
 the disposable OAuth/API smoke. The same smoke supports
 `--with-usda` for a live empty-catalog → verified chicken → 150 g flow through real
 OAuth and .NET. Run only against a fresh disposable loopback stack, never production.
 No new workflow or duplicate image builds are needed.
+The same smoke also runs the estimate creation/retry/reuse scenario. Its
+`--offline-estimates` mode proves both source endpoints unavailable, then exercises real
+OAuth → MCP → Nutrition API → ai_estimate → 150 g → diary → repeated consumption
+using one product. Point both source base URLs at an unreachable loopback origin for
+this mode; it must run only against disposable storage.
 
 ## SQLite, Docker and migrations
 
