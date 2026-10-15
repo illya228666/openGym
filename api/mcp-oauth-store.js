@@ -4,6 +4,7 @@ import { atomicWrite } from './durable.js';
 import { MaxDynamicClients } from './mcp-config.js';
 
 const MaxRecords = 10000;
+const RefreshReplayHistorySeconds = 30 * 86400;
 const RenameAttempts = 5;
 const RenameRetryMilliseconds = 25;
 // shortcut: one Node writer; use a transactional shared adapter before scaling API replicas.
@@ -20,7 +21,8 @@ export function createOAuthStore(file, secret, active = () => true) {
     decipher.setAuthTag(Buffer.from(document.tag, 'base64'));
     const entries = JSON.parse(Buffer.concat([decipher.update(Buffer.from(document.data, 'base64')), decipher.final()]).toString('utf8'));
     if (!Array.isArray(entries) || entries.length > MaxRecords || entries.some(row =>
-      !Array.isArray(row) || typeof row[0] !== 'string' || !row[1]?.payload || !Number.isFinite(row[1].expiresAt)))
+      !Array.isArray(row) || typeof row[0] !== 'string' || !row[1]?.payload
+      || (row[1].expiresAt !== null && !Number.isFinite(row[1].expiresAt))))
       throw new Error('invalid OAuth records');
     rows = new Map(entries);
   } catch (error) {
@@ -28,7 +30,8 @@ export function createOAuthStore(file, secret, active = () => true) {
   }
   const index = (model, id) => `${model}:${crypto.createHash('sha256').update(String(id)).digest('hex')}`;
   let durableRows = new Map(rows);
-  const sweep = () => { for (const [id, row] of rows) if (row.expiresAt <= Date.now()) rows.delete(id); };
+  const alive = row => !!row && (row.expiresAt === null || row.expiresAt > Date.now());
+  const sweep = () => { for (const [id, row] of rows) if (!alive(row)) rows.delete(id); };
   const save = () => {
     sweep();
     const iv = crypto.randomBytes(12);
@@ -52,12 +55,12 @@ export function createOAuthStore(file, secret, active = () => true) {
   };
   const get = (model, id) => {
     const row = rows.get(index(model, id));
-    return row && row.expiresAt > Date.now() ? structuredClone(row.payload) : undefined;
+    return alive(row) ? structuredClone(row.payload) : undefined;
   };
   const set = (model, id, payload, seconds = 30 * 86400) => {
     sweep();
     if (rows.size >= MaxRecords && !rows.has(index(model, id))) throw new Error('OAuth storage capacity exceeded');
-    rows.set(index(model, id), { payload: structuredClone(payload), expiresAt: Date.now() + seconds * 1000 });
+    rows.set(index(model, id), { payload: structuredClone(payload), expiresAt: seconds === null ? null : Date.now() + seconds * 1000 });
     save();
   };
   const remove = (model, id) => { rows.delete(index(model, id)); save(); };
@@ -73,7 +76,13 @@ export function createOAuthStore(file, secret, active = () => true) {
     async upsert(id, payload, expiresIn) {
       if (this.model === 'Client' && !get('Client', id) && [...rows.keys()].filter(key => key.startsWith('Client:')).length >= MaxDynamicClients)
         throw new Error('OAuth client capacity exceeded');
-      set(this.model, id, payload, this.model === 'Client' ? 3153600000 : expiresIn);
+      // The adapter owns connection lifetime; do not persist provider-generated grant/refresh expiry.
+      if (this.model === 'Grant' || this.model === 'RefreshToken') {
+        payload = { ...payload };
+        delete payload.exp;
+        expiresIn = payload.consumed ? RefreshReplayHistorySeconds : null;
+      }
+      set(this.model, id, payload, this.model === 'Client' ? null : expiresIn);
     }
     async find(id) {
       const payload = get(this.model, id);
@@ -84,18 +93,38 @@ export function createOAuthStore(file, secret, active = () => true) {
     async findByUid(uid) { return this.findBy('uid', uid); }
     async findByUserCode(code) { return this.findBy('userCode', code); }
     async findBy(field, value) {
-      for (const [id, row] of rows) if (id.startsWith(this.model + ':') && row.expiresAt > Date.now() && row.payload[field] === value)
+      for (const [id, row] of rows) if (id.startsWith(this.model + ':') && alive(row) && row.payload[field] === value)
         return structuredClone(row.payload);
     }
     async consume(id) {
       const payload = get(this.model, id);
       if (payload) set(this.model, id, { ...payload, consumed: Math.floor(Date.now() / 1000) },
-        Math.max(1, (rows.get(index(this.model, id)).expiresAt - Date.now()) / 1000));
+        this.model === 'RefreshToken' ? RefreshReplayHistorySeconds
+          : Math.max(1, (rows.get(index(this.model, id)).expiresAt - Date.now()) / 1000));
     }
     async destroy(id) { this.model === 'Grant' ? revoke(id) : remove(this.model, id); }
     async revokeByGrantId(id) { revoke(id); }
   }
+  // Upgrade only live, still-authorized legacy grants; never resurrect expired or session-revoked access.
+  let migrated = false;
+  for (const [id, row] of rows) {
+    if (!id.startsWith('OpenGymGrant:') || !alive(row) || row.payload.persistent || !active(row.payload)) continue;
+    const grantId = row.payload.grantId;
+    const grant = get('Grant', grantId);
+    if (!grant || grant.exp <= Math.floor(Date.now() / 1000)) continue;
+    rows.set(id, { payload: { ...row.payload, persistent: true }, expiresAt: null });
+    for (const [artifactId, artifact] of rows) {
+      if (!alive(artifact) || artifact.payload.consumed || artifact.payload.exp <= Math.floor(Date.now() / 1000)) continue;
+      if (artifactId !== index('Grant', grantId)
+        && !(artifactId.startsWith('RefreshToken:') && artifact.payload.grantId === grantId)) continue;
+      const payload = { ...artifact.payload };
+      delete payload.exp;
+      rows.set(artifactId, { payload, expiresAt: null });
+    }
+    migrated = true;
+  }
+  if (migrated) save();
   return { Adapter, get, set, remove, revoke, list: model => [...rows]
-    .filter(([id, row]) => id.startsWith(model + ':') && row.expiresAt > Date.now())
+    .filter(([id, row]) => id.startsWith(model + ':') && alive(row))
     .map(([, row]) => structuredClone(row.payload)) };
 }

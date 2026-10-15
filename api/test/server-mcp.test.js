@@ -21,8 +21,8 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
   for (const id of ['alice', 'bob']) fs.writeFileSync(path.join(directory, `state-${id}.json`), JSON.stringify({
     unit: 'kg', routines: [{ id: 'r1', name: id + ' routine', ex: [] }], customEx: []
   }));
-  const mint = uid => {
-    const payload = `${uid}:${Date.now() + 600000}:0`;
+  const mint = (uid, version = 0) => {
+    const payload = `${uid}:${Date.now() + 600000}:${version}`;
     return payload + '.' + crypto.createHmac('sha256', secret).update(payload).digest('base64url');
   };
   let child, log, base;
@@ -263,9 +263,12 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
   assert.equal((await repeated.json()).error, 'invalid_grant');
   assert.equal((await rpc(latest.access_token, 'tools/list')).status, 401);
   await request('/api/logout/all', { method: 'POST', headers: { Authorization: 'Bearer ' + mint('bob'), 'Content-Type': 'application/json' }, body: '{}' });
-  assert.equal((await rpc(bob.access_token, 'tools/list')).status, 401);
-  assert.equal((await rpc(rotated.access_token, 'tools/list')).status, 401);
-  assert.equal((await refresh(rotated.refresh_token)).status, 400);
+  assert.equal((await request('/api/me', { headers: { Cookie: 'gymsid=' + mint('bob') } })).status, 401);
+  assert.equal((await rpc(bob.access_token, 'tools/list')).status, 200);
+  assert.equal((await rpc(rotated.access_token, 'tools/list')).status, 200);
+  assert.equal((await refresh(rotated.refresh_token)).status, 200);
+  const afterLogout = await (await request('/api/mcp/connections', { headers: { Cookie: 'gymsid=' + mint('bob', 1) } })).json();
+  assert.ok(afterLogout.connections.some(connection => connection.clientId === 'test-client'));
   await connect('alice', 'training.read', true);
   const savedSettings = await saveSettings('admin', configuration);
   assert.equal(savedSettings.status, 200);

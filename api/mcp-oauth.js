@@ -7,7 +7,7 @@ import { createMetadataFetch, metadataUrl, validateClientMetadata, MaxDynamicCli
 import { createWindow } from './rate-limit.js';
 
 export { McpScopes } from './mcp-config.js';
-const GrantLifetimeSeconds = 30 * 86400;
+const OAuthSessionSeconds = 30 * 86400;
 const InternalCredentialSeconds = 60;
 const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
 
@@ -19,10 +19,9 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
   clients = configuration.clients;
   const prefix = resource.pathname.slice(0, -'/mcp'.length);
   const issuer = resource.origin + prefix + '/oauth';
-  const sessionVersion = user => user.sv || 0;
   const active = binding => {
     const user = userById(binding.userId);
-    return !!user && !user.disabled && sessionVersion(user) === binding.sessionVersion;
+    return !!user && !user.disabled && (binding.persistent || (user.sv || 0) === binding.sessionVersion);
   };
   const store = existingStore || createOAuthStore(path.join(data, 'mcp-oauth.json'), secret, active);
   const fetchBudget = createWindow({ max: 20, windowMs: 60000 });
@@ -65,8 +64,9 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
           if (requested !== resource.href) throw new errors.InvalidTarget();
           return { scope: McpScopes.join(' '), audience: resource.href, accessTokenTTL: 600, accessTokenFormat: 'opaque' };
         } } },
-    ttl: { AccessToken: 600, AuthorizationCode: 60, Interaction: 600, Grant: GrantLifetimeSeconds,
-      RefreshToken: GrantLifetimeSeconds, Session: GrantLifetimeSeconds },
+    // The durable adapter removes expiry for connections, not browser sessions or access tokens.
+    ttl: { AccessToken: 600, AuthorizationCode: 60, Interaction: 600, Grant: OAuthSessionSeconds,
+      RefreshToken: OAuthSessionSeconds, Session: OAuthSessionSeconds },
     rotateRefreshToken: () => true,
     // Always reconfirm an authorization request against the current OpenGym browser session.
     loadExistingGrant: async ctx => {
@@ -98,7 +98,7 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
   const mac = value => crypto.createHmac('sha256', secret).update('nutrition-delegation-v1:' + value).digest('base64url');
   function nutritionCredential(principal, method, pathname) {
     const payload = Buffer.from(JSON.stringify({ aud: 'opengym-nutrition', uid: principal.user.id,
-      sv: sessionVersion(principal.user), grantId: principal.grantId, method, pathname,
+      grantId: principal.grantId, method, pathname,
       exp: Date.now() + InternalCredentialSeconds * 1000 })).toString('base64url');
     return 'ogn.' + payload + '.' + mac(payload);
   }
@@ -111,7 +111,7 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
     try { claim = JSON.parse(Buffer.from(payload, 'base64url')); } catch { return null; }
     const binding = store.get('OpenGymGrant', claim.grantId);
     if (claim.aud !== 'opengym-nutrition' || !Number.isFinite(claim.exp) || claim.exp <= Date.now()
-      || !binding || binding.userId !== claim.uid || !active(binding) || claim.sv !== binding.sessionVersion
+      || !binding || binding.userId !== claim.uid || !active(binding)
       || !store.get('Grant', claim.grantId)) return null;
     const required = claim.method === 'GET' ? 'nutrition.read' : 'nutrition.write';
     const allowed = (claim.method === 'GET' && /^\/api\/nutrition\/external\/products(?:\/[0-9]{8,14})?$/.test(claim.pathname))
@@ -184,9 +184,9 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
         const scopes = String(details.params.scope || '').split(' ').filter(scope => McpScopes.includes(scope));
         grant.addResourceScope(resource.href, scopes.join(' '));
         const grantId = await grant.save();
-        store.set('OpenGymGrant', grantId, { grantId, userId: user.id, sessionVersion: sessionVersion(user),
+        store.set('OpenGymGrant', grantId, { grantId, userId: user.id, persistent: true,
           clientId: details.params.client_id, clientName: (await provider.Client.find(details.params.client_id))?.clientName || details.params.client_id,
-          scopes, created: new Date().toISOString() }, GrantLifetimeSeconds);
+          scopes, created: new Date().toISOString() }, null);
         await provider.interactionFinished(req, res, { consent: { grantId } }, { mergeWithLastSubmission: true });
       } else json(res, 403, { error: 'account_changed_restart_authorization' });
       return true;

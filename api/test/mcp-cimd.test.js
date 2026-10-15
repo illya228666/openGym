@@ -13,7 +13,7 @@ for (const scenario of [
   { label: 'read-only', scopes: ['training.read'] },
   { label: 'full access', scopes: ['training.read', 'nutrition.read', 'nutrition.write'] }
 ])
-test('CIMD consent permits only the validated callback origin and requested scopes (' + scenario.label + ')', async t => {
+test('CIMD consent and persistent refresh preserve scopes, account checks and revocation (' + scenario.label + ')', async t => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'gym-cimd-'));
   let oauth; let fetches = 0;
   const json = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -25,10 +25,11 @@ test('CIMD consent permits only the validated callback origin and requested scop
   t.after(async () => { await new Promise(resolve => server.close(resolve)); fs.rmSync(data, { recursive: true, force: true }); });
   const origin = 'http://localhost:' + server.address().port;
   const user = { id: 'alice', name: 'Alice' };
-  const options = { data, secret: 'secret', origin, userById: id => id === user.id ? user : null,
+  let deleted = false;
+  const options = { data, secret: 'secret', origin, userById: id => !deleted && id === user.id ? user : null,
     readSession: req => req.headers.cookie?.includes('opengym=alice') ? user : null, json,
     metadataFetch: createMetadataFetch({ lookup: (_host, _options, callback) => callback(null, [{ address: '93.184.216.34', family: 4 }]),
-      request: metadataTransport(clientDocument(), { inspect: () => fetches++ }) }) };
+      request: metadataTransport({ ...clientDocument(), grant_types: ['authorization_code', 'refresh_token'] }, { inspect: () => fetches++ }) }) };
   oauth = createMcpOAuth(options);
   const call = (pathname, options = {}) => fetch(origin + pathname, { ...options, redirect: 'manual' });
   const metadata = await (await call('/.well-known/oauth-authorization-server')).json();
@@ -36,7 +37,7 @@ test('CIMD consent permits only the validated callback origin and requested scop
   assert.equal(metadata.registration_endpoint, origin + '/oauth/reg');
   const verifier = crypto.randomBytes(32).toString('base64url');
   const params = { client_id: documentUrl, redirect_uri: 'https://client.example/callback', scope: scenario.scopes.join(' ') + ' offline_access',
-    response_type: 'code', resource: origin + '/mcp', state: 'state',
+    response_type: 'code', resource: origin + '/mcp', state: 'state', prompt: 'consent',
     code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' };
   const jar = new Map();
   const browser = async (pathname, options = {}) => {
@@ -81,15 +82,55 @@ test('CIMD consent permits only the validated callback origin and requested scop
     body: new URLSearchParams({ client_id: documentUrl, grant_type: 'authorization_code', code, code_verifier: verifier,
       redirect_uri: params.redirect_uri, resource: params.resource }) });
   assert.equal(exchanged.status, 200, await exchanged.clone().text());
-  const tokens = await exchanged.json();
+  let tokens = await exchanged.json();
+  assert.ok(tokens.refresh_token, JSON.stringify(tokens));
+  assert.equal(tokens.expires_in, 600);
   assert.equal((await oauth.verify(tokens.access_token, 'training.read')).user.id, 'alice');
   if (scenario.scopes.includes('nutrition.write')) {
     assert.deepEqual((await oauth.verify(tokens.access_token, 'nutrition.write')).scopes, scenario.scopes);
   } else await assert.rejects(oauth.verify(tokens.access_token, 'nutrition.write'), { status: 403 });
   const grant = oauth.grants('alice')[0]; assert.equal(grant.clientId, documentUrl);
   assert.equal(grant.clientName, 'Compatible client');
+  assert.equal(oauth.store.get('Grant', grant.grantId).exp, undefined);
+  assert.equal(oauth.store.list('RefreshToken').find(token => token.grantId === grant.grantId).exp, undefined);
+  const refresh = token => call('/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', client_id: documentUrl, refresh_token: token, resource: params.resource }) });
+  const initial = tokens;
+  const now = Date.now();
+  let elapsed = 31 * 86400000;
+  t.mock.method(Date, 'now', () => now + elapsed);
   oauth = createMcpOAuth(options);
+  await assert.rejects(oauth.verify(tokens.access_token), { status: 401 });
+  assert.equal(oauth.grants('alice').length, 1);
+  let renewed = await refresh(tokens.refresh_token);
+  assert.equal(renewed.status, 200, await renewed.clone().text());
+  tokens = await renewed.json();
   assert.equal((await oauth.verify(tokens.access_token)).user.id, 'alice');
+  elapsed += 31 * 86400000;
+  oauth = createMcpOAuth(options);
+  renewed = await refresh(tokens.refresh_token);
+  assert.equal(renewed.status, 200, await renewed.clone().text());
+  tokens = await renewed.json();
+  // An old consumed token is rejected after history expires without revoking the current chain.
+  assert.equal((await refresh(initial.refresh_token)).status, 400);
+  assert.deepEqual((await oauth.verify(tokens.access_token)).scopes, scenario.scopes);
+  const principal = await oauth.verify(tokens.access_token);
+  const delegated = oauth.nutritionCredential(principal, 'GET', '/api/nutrition/diary');
+  user.sv = 1;
+  assert.equal((await oauth.verify(tokens.access_token)).user.id, 'alice');
+  assert.equal(oauth.grants('alice').length, 1);
+  if (scenario.scopes.includes('nutrition.read')) assert.equal(oauth.nutritionIdentity(delegated).user.id, 'alice');
+  user.disabled = true;
+  await assert.rejects(oauth.verify(tokens.access_token), { status: 401 });
+  assert.equal((await refresh(tokens.refresh_token)).status, 400);
+  assert.equal(oauth.nutritionIdentity(delegated), null);
+  user.disabled = false;
+  deleted = true;
+  await assert.rejects(oauth.verify(tokens.access_token), { status: 401 });
+  assert.equal((await refresh(tokens.refresh_token)).status, 400);
+  deleted = false;
   oauth.store.revoke(grant.grantId);
   await assert.rejects(oauth.verify(tokens.access_token), { status: 401 });
+  assert.equal((await refresh(tokens.refresh_token)).status, 400);
+  assert.equal(oauth.nutritionIdentity(delegated), null);
 });

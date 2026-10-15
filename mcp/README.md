@@ -95,7 +95,9 @@ client ID, callback and requested permissions on OpenGym's consent page.
 
 Connect to `MCP_PUBLIC_URL`, sign in to OpenGym with the existing login, then approve requested scopes. An already signed-in browser still gets explicit consent. When not signed in, the page links to OpenGym in another tab; reload consent after signing in. No app password or browser token is sent to ChatGPT.
 
-`oidc-provider` handles authorization code + mandatory PKCE S256, exact redirect matching, opaque access tokens (10 minutes), rotating refresh tokens and grants with a maximum 30-day lifetime. Clients request `offline_access` for refresh. Refresh does not extend the grant indefinitely. The `resource` is the exact MCP URL.
+`oidc-provider` handles authorization code + mandatory PKCE S256, exact redirect matching, opaque access tokens (10 minutes), rotating refresh tokens and non-expiring grants. Clients must request `offline_access`, retain the latest refresh token and refresh access automatically; the active refresh token has no absolute or idle expiry. OAuth browser sessions still expire after 30 days, independently of connections. The `resource` is the exact MCP URL.
+
+Consumed refresh tokens are retained for 30 days from use. Reuse within that window revokes the grant and its token chain. Older consumed tokens are still rejected, but no longer trigger chain-wide revocation. Live legacy grants and unconsumed refresh tokens are upgraded on store load without adding scopes; expired, manually revoked or session-revoked legacy connections are not restored.
 
 | Scope | Access |
 |---|---|
@@ -103,7 +105,7 @@ Connect to `MCP_PUBLIC_URL`, sign in to OpenGym with the existing login, then ap
 | `nutrition.read` | Personal products, entries and daily totals |
 | `nutrition.write` | Single-entry create, update and confirmed delete |
 
-Every request/tool checks current account, session version, resource, grant and scope. Disabled/deleted users, revoked grants and **sign out all devices** lose access and refresh rights. Ordinary OpenGym sessions cannot authorize `/mcp`; MCP tokens cannot authorize ordinary `/api/*` operations. Tool scope errors carry `mcp/www_authenticate` for reauthorization; missing HTTP authorization returns `401` with discovery. Host/Origin checks, a 64 KiB body limit and per-user request budgets protect MCP; OAuth endpoints have a per-address budget.
+Every request/tool checks current account, resource, grant and scope. Disabled/deleted users and revoked grants lose access and refresh rights. Ordinary logout and **sign out all devices** invalidate browser sessions, not MCP connections. Revoke a connection explicitly in Settings → MCP; detected refresh-token replay remains a security exception. Ordinary OpenGym sessions cannot authorize `/mcp`; MCP tokens cannot authorize ordinary `/api/*` operations. Tool scope errors carry `mcp/www_authenticate` for reauthorization; missing HTTP authorization returns `401` with discovery. Host/Origin checks, a 64 KiB body limit and per-user request budgets protect MCP; OAuth endpoints have a per-address budget.
 
 ### Inspect and revoke connections
 
@@ -118,7 +120,7 @@ disabled. Disabling blocks new MCP/OAuth requests immediately but preserves gran
 Already admitted requests can finish, including their narrowly bound Nutrition delegation.
 Re-enabling reuses the same provider/store/keys and valid grants, without replacing ordinary
 HTTP sessions. Revoke separately if access must stay invalid after re-enabling. **Sign out all
-devices** is still the account-wide revoke option.
+devices** does not revoke MCP connections.
 
 ## Tools
 
@@ -181,10 +183,10 @@ Existing `web → api → nutrition` remains intact. nginx proxies `/mcp` withou
 
 Reuse Cloudflare HTTPS. Do not cache dynamic routes or put interactive Access/challenge pages in front of MCP/token/discovery. Keep API/Nutrition ports internal. Cloudflare Tunnel can carry the same origin without extra origin ports. OpenAI Secure MCP Tunnel is not configured here; adding it later is a connectivity choice, not a different tool implementation.
 
-Nutrition receives a 60-second HMAC-signed internal credential bound to user, grant, session version, HTTP method and path. It revalidates with Node and compares the delegated method/path. No broad browser session is manufactured or forwarded. External lookup uses `nutrition.read`; import uses `nutrition.write`. MCP does not read SQLite, and OFF receives no user credentials or identifiers.
+Nutrition receives a 60-second HMAC-signed internal credential bound to user, grant, HTTP method and path. It revalidates account status and grant with Node and compares the delegated method/path; browser logout does not invalidate the independent connection. No broad browser session is manufactured or forwarded. External lookup uses `nutrition.read`; import uses `nutrition.write`. MCP does not read SQLite, and OFF receives no user credentials or identifiers.
 Custom food creation also uses nutrition.write; USDA search uses nutrition.read. No additional scopes or catalog edit/delete tools are exposed.
 
-Artifacts/signing keys are stored separately in `data/mcp-oauth.json`, AES-256-GCM encrypted with a key derived from existing `data/secret`. Back up and restore **both together**; protect backups as credentials. Corruption/mismatched secret fails startup closed. Do not delete this file as a “repair”; old backups can resurrect grants and need deliberate revoke-all/session-version reset. OAuth assumes **one Node writer**, like current JSON storage; replace the adapter with transactional shared storage before multiple replicas. Expired rows are swept on writes and capacity is bounded.
+Artifacts/signing keys are stored separately in `data/mcp-oauth.json`, AES-256-GCM encrypted with a key derived from existing `data/secret`. Back up and restore **both together**; protect backups as credentials. Corruption/mismatched secret fails startup closed. Do not delete this file as a “repair”; old backups can resurrect grants, so restored connections must be reviewed and explicitly revoked where needed (browser session-version reset is not MCP revocation). OAuth assumes **one Node writer**, like current JSON storage; replace the adapter with transactional shared storage before multiple replicas. Expired rows are swept on writes and capacity is bounded. Non-expiring rows use explicit `null` expiry; older API versions do not support this representation, so rolling back code requires a matching pre-upgrade backup and a review of restored grants.
 
 GHCR still publishes three application images after successful main CI. `dev` validates but does not deploy production. CI adds a disposable OAuth + real Nutrition smoke; deployment readiness optionally probes discovery and unauthenticated MCP through nginx without data mutations. Install the updated deployment script separately when releasing; this checkout does not modify Proxmox.
 
