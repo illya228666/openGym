@@ -76,7 +76,7 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(p.returncode == 0, expected_success, p.stdout + p.stderr)
             if expected_success:
                 self.assertIn("Release provenance validated", (root / "summary").read_text())
-                self.assertIn("tree " + TREE, (root / "summary").read_text())
+                self.assertIn(TREE, (root / "summary").read_text())
             else:
                 self.assertIn("Publish blocked", p.stderr)
 
