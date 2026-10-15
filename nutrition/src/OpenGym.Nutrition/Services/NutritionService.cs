@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using OpenGym.Nutrition.Api;
@@ -10,7 +11,7 @@ using OpenGym.Nutrition.Persistence;
 namespace OpenGym.Nutrition.Services;
 
 /// <summary>User-scoped operations shared by HTTP clients; no UI or gateway policy lives here.</summary>
-public sealed class NutritionService(NutritionDbContext db)
+public sealed partial class NutritionService(NutritionDbContext db, FoodCompositionClient foodComposition)
 {
     public async Task<ProductPage> Products(string userId, string? search, int offset, CancellationToken ct,
         string? brand = null, string? barcode = null, string? externalId = null, string? externalSource = null)
@@ -50,6 +51,9 @@ public sealed class NutritionService(NutritionDbContext db)
 
     public async Task<ProductResponse> SaveProduct(string userId, Guid? id, ProductRequest request, CancellationToken ct)
     {
+        // The existing UI can edit values, but cannot retain a server-verified claim afterwards.
+        if (request.Id is not null || request.Source is not null || request.FoodState is not null
+            || request.CookingMethod is not null || request.ConfirmedPreparationAnalog) throw Invalid();
         var name = request.Name?.Trim();
         var brand = string.IsNullOrWhiteSpace(request.Brand) ? null : request.Brand.Trim();
         if (string.IsNullOrEmpty(name) || name.Length > 200 || brand?.Length > 100
@@ -67,6 +71,12 @@ public sealed class NutritionService(NutritionDbContext db)
         product.Protein = request.Protein!.Value;
         product.Fat = request.Fat!.Value;
         product.Carbohydrates = request.Carbohydrates!.Value;
+        if (product.ProvenanceJson is not null)
+        {
+            var provenance = ReadProvenance(product.ProvenanceJson)!;
+            product.ProvenanceJson = JsonSerializer.Serialize(provenance with
+                { Source = provenance.Source with { VerificationStatus = "user_edited" } });
+        }
         if (!id.HasValue) db.Products.Add(product);
         await db.SaveChangesAsync(ct);
         return ProductView(product);
@@ -202,15 +212,17 @@ public sealed class NutritionService(NutritionDbContext db)
         entry.Protein = product.Protein;
         entry.Fat = product.Fat;
         entry.Carbohydrates = product.Carbohydrates;
+        entry.ProvenanceJson = product.ProvenanceJson;
     }
 
+    private static ProductProvenance? ReadProvenance(string? json) => json is null ? null : JsonSerializer.Deserialize<ProductProvenance>(json);
     private static ProductResponse ProductView(Product p) => new(p.Id, p.Name, p.Brand, p.Calories, p.Protein, p.Fat, p.Carbohydrates,
-        p.ExternalSource, p.ExternalId, p.Barcode, p.PackageQuantity, p.SourceUrl, p.NutritionSource, p.RetrievedAtUtc, p.SourceFingerprint);
+        p.ExternalSource, p.ExternalId, p.Barcode, p.PackageQuantity, p.SourceUrl, p.NutritionSource, p.RetrievedAtUtc, p.SourceFingerprint, ReadProvenance(p.ProvenanceJson));
     private static EntryResponse EntryView(DiaryEntry e)
     {
         var per100 = new Nutrients(e.Calories, e.Protein, e.Fat, e.Carbohydrates);
         return new(e.Id, e.ProductId, e.Name, e.Brand, e.QuantityGrams, e.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            e.Time?.ToString("HH:mm", CultureInfo.InvariantCulture), per100, NutritionCalculator.ForQuantity(per100, e.QuantityGrams));
+            e.Time?.ToString("HH:mm", CultureInfo.InvariantCulture), per100, NutritionCalculator.ForQuantity(per100, e.QuantityGrams), ReadProvenance(e.ProvenanceJson));
     }
 
     private static bool ValidValue(decimal? value, decimal max) => value is >= 0 && value <= max && decimal.Round(value.Value, 3) == value;

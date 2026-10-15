@@ -118,6 +118,61 @@ details, reads the selected OFF card, imports with its fingerprint and records a
 user-supplied grams. Unambiguous checked products need no redundant confirmation.
 Photos, portions/pieces, inferred weights and internal AI services are not included.
 
+## Verified custom foods through MCP
+
+After a personal catalog miss, `nutrition_search_reference_foods` calls authenticated
+`GET /api/nutrition/reference-foods?search=` with English food/preparation terms.
+`nutrition_create_custom_product` uses existing `POST /api/nutrition/products` with
+`id`, name/optional brand, complete per-100g calories/protein/fat/carbohydrates,
+`source: {provider: usda, foodId, url}`, `foodState` and optional `cookingMethod`.
+The server fetches USDA independently and compares all four values, rounded to three
+decimal places. It accepts Foundation, SR Legacy and Survey (FNDDS), not arbitrary
+branded substitutes for homemade food. Incomplete search values are null, never zero-filled.
+
+USDA data are [public domain / CC0](https://fdc.nal.usda.gov/api-guide/).
+`Nutrition__UsdaApiKey` optionally supplies a free data.gov key via `X-Api-Key`.
+Default `DEMO_KEY` is evaluation-only: 30 requests/hour, 50/day per IP. Requests use a
+USDA HTTPS origin, numeric IDs, no redirects/cookies, five-second timeout and
+2 MiB response limit; supplied URLs are validated provenance, never fetch targets.
+Only trusted deployment configuration can override `Nutrition__UsdaBaseUrl` (an origin,
+like the existing OFF fixture setting); MCP cannot supply an HTTP target.
+No paid API, AI service, extra container or public port. BLS is **not** implemented; the existing Open Food Facts import is preserved.
+Additional sources need separate verification
+and licensing review, not a URL allow-all.
+
+`foodState`: raw/ready/cooked. Cooked requires `cookingMethod`: cooked (unspecified),
+roasted/baked/grilled/boiled/fried/air_fried/steamed/stewed/braised. A different method
+requires explicit user confirmation and `confirmedPreparationAnalog: true`; saved
+provenance records `preparationAnalog: true` alongside the original source description.
+Confirmation cannot override raw/cooked mismatch. Matching food identity, ingredients
+(including oil), brand, grams and date remains the client's job. Do not convert raw
+mass to cooked mass without known yields. Source verification proves reference values,
+not that the user's meal exactly equals that reference.
+
+Products and new entries expose source description, dataset type, URL, verification
+timestamp, preparation and `source_verified_reference` status: reference averages,
+**not exact lab measurements of the meal**. Manual edits mark product provenance
+`user_edited`. Entry nutrients and provenance are independent snapshots; existing
+history is neither rewritten nor backfilled with invented sources.
+
+Custom creation saves the product and UUID retry key atomically. Reuse the same UUID
+and payload after a timeout; replay works even if USDA is offline. New keys for the
+same per-user source/brand/preparation reuse the existing product and persist aliases.
+Use the **returned ID** for `nutrition_create_entry`. Conflicting keys return 409;
+deleted products return 410 and are not resurrected. Manual products without sources
+are not merged just because names look similar. After successful creation, save eaten
+grams/date with a stable entry UUID. A fresh independent UUID is a new operation:
+check the diary and clarify if a natural-language command might be a retry or another
+identical meal. Report partial success when product creation succeeds but diary fails.
+
+Missing/unsupported sources, missing nutrients, mismatched values, unconfirmed analogs
+or unavailable USDA stop automatic creation; never guess values. Existing CI uses
+the existing catalog-fixture container for both OFF and USDA (`--usda-fixture`) and
+the disposable OAuth/API smoke. The same smoke supports
+`--with-usda` for a live empty-catalog → verified chicken → 150 g flow through real
+OAuth and .NET. Run only against a fresh disposable loopback stack, never production.
+No new workflow or duplicate image builds are needed.
+
 ## SQLite, Docker and migrations
 
 Both Compose files mount `nutrition-data:/data` (normally `opengym_nutrition-data`).

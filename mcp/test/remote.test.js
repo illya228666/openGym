@@ -5,6 +5,40 @@ import { createNutritionTools } from '../src/nutrition.js'
 import http from 'node:http'
 import { createHttpMcp } from '../src/http.js'
 
+test('Custom food tools preserve provenance, stable creation IDs and returned deduplication IDs', async () => {
+  const calls = []
+  const existingId = '397b3f7a-1d7e-441d-8d5c-dcce22c1ba84'
+  const tools = createNutritionTools(async (...args) => { calls.push(args); return { id: existingId } })
+  const call = (name, args) => {
+    const tool = tools.find(t => t.name === name)
+    return tool.handler(z.object(tool.schema).strict().parse(args))
+  }
+  const body = { product_id: 'a164d2ef-8b28-4db5-93ac-f06b721ef935', name: 'Cooked chicken breast',
+    calories: 165, protein: 31.02, fat: 3.57, carbohydrates: 0,
+    source: { provider: 'usda', food_id: '171077', url: 'https://fdc.nal.usda.gov/food-details/171077/nutrients' },
+    food_state: 'cooked', cooking_method: 'roasted' }
+  await call('nutrition_search_reference_foods', { search: 'chicken breast cooked roasted' })
+  expect(calls[0]).toEqual(['GET', '/api/nutrition/reference-foods', { search: 'chicken breast cooked roasted' }])
+  const created = await call('nutrition_create_custom_product', body)
+  await call('nutrition_create_custom_product', body)
+  expect(calls[1]).toEqual(['POST', '/api/nutrition/products', {}, { id: body.product_id,
+    name: body.name, brand: null, calories: 165, protein: 31.02, fat: 3.57, carbohydrates: 0,
+    source: { provider: 'usda', foodId: '171077', url: body.source.url }, foodState: 'cooked',
+    cookingMethod: 'roasted', confirmedPreparationAnalog: false }])
+  expect(calls[2]).toEqual(calls[1])
+  await call('nutrition_create_entry', { entry_id: body.product_id, product_id: created.id, quantity_grams: 150, date: '2026-10-15' })
+  expect(calls[3][3].productId).toBe(existingId)
+  expect(calls[3][3].quantityGrams).toBe(150)
+  const custom = tools.find(t => t.name === 'nutrition_create_custom_product')
+  expect(custom.scope).toBe('nutrition.write')
+  expect(custom.idempotent).toBe(true)
+  expect(tools.find(t => t.name === 'nutrition_search_reference_foods').scope).toBe('nutrition.read')
+  for (const invalid of [{ ...body, protein: undefined }, { ...body, calories: -1 }, { ...body, fat: 1.2345 },
+    { ...body, source: { ...body.source, food_id: '../private' } }, { ...body, user_id: 'bob' }])
+    expect(() => call('nutrition_create_custom_product', invalid)).toThrow()
+  expect(calls).toHaveLength(4)
+})
+
 test('HTTP MCP requests all three scopes before accepting OAuth tokens', async ({ onTestFinished }) => {
   let entrance
   const listener = http.createServer((req, res) => entrance.handle(req, res))

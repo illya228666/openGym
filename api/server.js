@@ -1876,6 +1876,7 @@ const routes = {
   'GET /api/nutrition/external/products': nutritionGateway,
   'GET /api/nutrition/external/products/{externalId}': nutritionGateway,
   'POST /api/nutrition/products/import': nutritionGateway,
+  'GET /api/nutrition/reference-foods': nutritionGateway,
   'POST /api/nutrition/products': nutritionGateway,
   'GET /api/nutrition/products/{id}': nutritionGateway,
   'PUT /api/nutrition/products/{id}': nutritionGateway,

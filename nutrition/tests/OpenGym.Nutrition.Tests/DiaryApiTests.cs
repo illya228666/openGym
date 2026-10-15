@@ -219,7 +219,7 @@ public sealed class DiaryApiTests
             await connection.OpenAsync();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM __EFMigrationsHistory";
-            Assert.Equal(2L, await command.ExecuteScalarAsync());
+            Assert.Equal(3L, await command.ExecuteScalarAsync());
         }
         finally { SqliteConnection.ClearAllPools(); if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }

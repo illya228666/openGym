@@ -244,7 +244,7 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   <p class="api-facts">
     <span>OpenAPI 3.1.0</span>
     <span>openGym v1.3.10</span>
-    <span>89 endpoints</span>
+    <span>90 endpoints</span>
     <span>AGPL-3.0-or-later</span>
   </p>
 
@@ -488,6 +488,46 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   </div>
 </details>
 
+<details class="ep" id="op-searchNutritionReferenceFoods">
+  <summary>
+    <span class="m get">GET</span>
+    <span class="ep-path"><code>/api/nutrition/reference-foods</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">Search non-branded USDA FoodData Central reference foods.</span>
+  </summary>
+  <div class="ep-body">
+<p>Authenticated search; candidates are not automatically a match to the meal. Null nutrients mean incomplete data, never zero-filled. Data are CC0 reference values, not exact measurements of the user's food.</p>
+    <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Requires a session: the cookie set at sign-in, or <code>Authorization: Bearer &lt;token&gt;</code> from mobile-app pairing.</span></p>
+<p class="ep-h">Query parameters</p><div class="ptab">
+  <div class="prow">
+    <span class="p-name">search<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(&le; 200 chars)</span></span>
+    <span class="p-desc"></span>
+  </div>
+</div>
+
+    <p class="ep-h">Responses</p>
+    <div class="ptab">
+  <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">Up to ten non-branded candidates.<span class="r-sig">{ foods: object[] }</span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">400</span>
+    <span class="p-desc">Invalid search or incomplete upstream data.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">401</span>
+    <span class="p-desc">Authentication required.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s5">503</span>
+    <span class="p-desc">Source or service unavailable; retry later.</span>
+  </div>
+    </div>
+  </div>
+</details>
+
 <details class="ep" id="op-listNutritionProducts">
   <summary>
     <span class="m get">GET</span>
@@ -580,6 +620,10 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <p class="ep-h">Responses</p>
     <div class="ptab">
   <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">Identical custom-product retry or deduplicated existing product; use the returned id.<span class="r-sig"><a href="#schema-NutritionProduct">NutritionProduct</a></span></span>
+  </div>
+  <div class="prow rrow">
     <span class="r-code s2">201</span>
     <span class="p-desc">Successful user-scoped operation.<span class="r-sig"><a href="#schema-NutritionProduct">NutritionProduct</a></span></span>
   </div>
@@ -597,11 +641,11 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   </div>
   <div class="prow rrow">
     <span class="r-code s4">409</span>
-    <span class="p-desc">Entry creation id already used with a different payload.</span>
+    <span class="p-desc">Creation id conflict or modified existing custom product definition.</span>
   </div>
   <div class="prow rrow">
     <span class="r-code s4">410</span>
-    <span class="p-desc">A retried entry creation refers to a deleted entry.</span>
+    <span class="p-desc">A retried custom product was deleted.</span>
   </div>
   <div class="prow rrow">
     <span class="r-code s5">503</span>
@@ -4070,10 +4114,10 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   <summary>
     <span class="sch-name"><code>NutritionProductInput</code></span>
     <span class="ep-chev" aria-hidden="true"></span>
-    <span class="ep-sum">All nutritional values are per 100 grams; up to 3 decimal places.</span>
+    <span class="ep-sum">All values are per 100 grams, up to 3 decimals.</span>
   </summary>
   <div class="ep-body">
-
+<p>Custom POST requires id, source and foodState together; cooked requires cookingMethod. Server fetches USDA and compares all values. Analogs require user confirmation; raw/cooked mismatches always fail. PUT is the existing manual edit and cannot set custom creation metadata; it marks prior provenance user_edited.</p>
 <div class="ptab">
   <div class="prow">
     <span class="p-name">name<em class="p-req" title="required">required</em></span>
@@ -4103,6 +4147,127 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   <div class="prow">
     <span class="p-name">carbohydrates<em class="p-req" title="required">required</em></span>
     <span class="p-type">number <span class="p-hint">(0&ndash;100)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">id</span>
+    <span class="p-type">string <span class="p-hint">(uuid)</span></span>
+    <span class="p-desc">POST only: durable creation key for custom products; reuse identical payload on retry.</span>
+  </div>
+  <div class="prow">
+    <span class="p-name">source</span>
+    <span class="p-type"><a href="#schema-NutritionFoodSourceInput">NutritionFoodSourceInput</a></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">foodState</span>
+    <span class="p-type">&quot;raw&quot; | &quot;ready&quot; | &quot;cooked&quot;</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">cookingMethod</span>
+    <span class="p-type">&quot;cooked&quot; | &quot;roasted&quot; | &quot;baked&quot; | &quot;grilled&quot; | &quot;boiled&quot; | &quot;fried&quot; | &quot;air_fried&quot; | &quot;steamed&quot; | &quot;stewed&quot; | &quot;braised&quot;</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">confirmedPreparationAnalog</span>
+    <span class="p-type">boolean <span class="p-hint">(default false)</span></span>
+    <span class="p-desc"></span>
+  </div>
+</div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionFoodSourceInput">
+  <summary>
+    <span class="sch-name"><code>NutritionFoodSourceInput</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum"></span>
+  </summary>
+  <div class="ep-body">
+
+<div class="ptab">
+  <div class="prow">
+    <span class="p-name">provider<em class="p-req" title="required">required</em></span>
+    <span class="p-type">&quot;usda&quot;</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">foodId<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">url<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(uri)</span></span>
+    <span class="p-desc">Exact USDA food-details URL for foodId; never fetched as a caller-supplied target.</span>
+  </div>
+</div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionProvenance">
+  <summary>
+    <span class="sch-name"><code>NutritionProvenance</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum"></span>
+  </summary>
+  <div class="ep-body">
+
+<div class="ptab">
+  <div class="prow">
+    <span class="p-name">foodState</span>
+    <span class="p-type">&quot;raw&quot; | &quot;ready&quot; | &quot;cooked&quot;</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">cookingMethod</span>
+    <span class="p-type">string | null</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">preparationAnalog</span>
+    <span class="p-type">boolean</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">source</span>
+    <span class="p-type">object</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">source.provider</span>
+    <span class="p-type">string</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">source.foodId</span>
+    <span class="p-type">string</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">source.url</span>
+    <span class="p-type">string <span class="p-hint">(uri)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">source.description</span>
+    <span class="p-type">string</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">source.dataType</span>
+    <span class="p-type">string</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">source.verificationStatus</span>
+    <span class="p-type">&quot;source_verified_reference&quot; | &quot;user_edited&quot;</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">source.verifiedAtUtc</span>
+    <span class="p-type">string <span class="p-hint">(date-time)</span></span>
     <span class="p-desc"></span>
   </div>
 </div>
@@ -4319,6 +4484,11 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   <div class="prow">
     <span class="p-name">per100Grams<em class="p-req" title="required">required</em></span>
     <span class="p-type"><a href="#schema-NutritionValues">NutritionValues</a></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">provenance</span>
+    <span class="p-type"><a href="#schema-NutritionProvenance">NutritionProvenance</a> | null</span>
     <span class="p-desc"></span>
   </div>
   <div class="prow">

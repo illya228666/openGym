@@ -115,6 +115,7 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
       || !store.get('Grant', claim.grantId)) return null;
     const required = claim.method === 'GET' ? 'nutrition.read' : 'nutrition.write';
     const allowed = (claim.method === 'GET' && /^\/api\/nutrition\/external\/products(?:\/[0-9]{8,14})?$/.test(claim.pathname))
+      || (claim.method === 'GET' && claim.pathname === '/api/nutrition/reference-foods')
       || (claim.method === 'POST' && claim.pathname === '/api/nutrition/products/import')
       || (/^\/api\/nutrition\/(products|diary|entries)(\/[0-9a-f-]{36})?$/.test(claim.pathname)
         && ['GET', 'POST', 'PUT', 'DELETE'].includes(claim.method));

@@ -111,13 +111,41 @@ const tool = async (name, args, error) => {
   if (error) assert.equal(envelope.result.structuredContent.code, error)
   return envelope.result.structuredContent
 }
-assert.equal((await rpc('tools/list', {})).result.tools.length, 19)
+assert.equal((await rpc('tools/list', {})).result.tools.length, 21)
 await toggle(false)
 await rpc('tools/list', {}, 404)
 assert.equal((await call('/oauth/token')).status, 404)
 assert.equal((await call('/api/me', { headers: { Cookie: cookie } })).status, 200)
 await toggle(true)
-assert.equal((await rpc('tools/list', {})).result.tools.length, 19)
+assert.equal((await rpc('tools/list', {})).result.tools.length, 21)
+assert.equal((await tool('nutrition_search_products', {})).products.length, 0)
+const customId = crypto.randomUUID()
+await tool('nutrition_create_custom_product', { product_id: customId, name: 'Rejected source',
+  calories: 165, protein: 31.02, fat: 3.57, carbohydrates: 0, food_state: 'cooked', cooking_method: 'roasted',
+  source: { provider: 'usda', food_id: '171077', url: 'http://169.254.169.254/private' } }, 'unsupported_source')
+assert.equal((await tool('nutrition_search_products', {})).products.length, 0)
+// CI uses its existing external-catalog fixture. --with-usda selects an actual external-service check.
+let customArguments
+if (process.argv.includes('--with-usda') || process.argv.includes('--usda-fixture')) {
+  const { foods } = await tool('nutrition_search_reference_foods', { search: 'chicken breast meat only cooked roasted' })
+  const reference = foods.find(food => /chicken/i.test(food.description) && /breast/i.test(food.description)
+    && /roasted/i.test(food.description) && !/\b(raw|skin|oil|fried)\b/i.test(food.description) && food.per100Grams)
+  assert.ok(reference, 'No complete, suitable USDA reference; clarify instead of inventing a product')
+  const custom = { product_id: customId, name: 'Cooked chicken breast (USDA reference)', ...reference.per100Grams,
+    food_state: 'cooked', cooking_method: 'roasted', source: { provider: 'usda', food_id: reference.foodId, url: reference.url } }
+  customArguments = custom
+  const food = await tool('nutrition_create_custom_product', custom)
+  assert.equal(food.provenance.source.verificationStatus, 'source_verified_reference')
+  assert.deepEqual(await tool('nutrition_create_custom_product', custom), food)
+  assert.equal((await tool('nutrition_create_custom_product', { ...custom, product_id: crypto.randomUUID() })).id, food.id)
+  const eaten = { entry_id: crypto.randomUUID(), product_id: food.id, quantity_grams: 150, date: '2026-10-15' }
+  const recorded = await tool('nutrition_create_entry', eaten)
+  assert.equal(recorded.quantityGrams, 150)
+  assert.equal(recorded.nutrition.calories, food.calories * 1.5)
+  assert.deepEqual(await tool('nutrition_create_entry', eaten), recorded)
+  assert.equal((await tool('nutrition_get_diary', { date: eaten.date })).entries.length, 1)
+  console.log(`${process.argv.includes('--usda-fixture') ? 'USDA fixture' : 'Live USDA'} + real OAuth MCP + .NET: empty catalog -> verified custom food -> 150 g, retries passed.`)
+}
 const productResponse = await call('/api/nutrition/products', { method: 'POST', headers: {
   Cookie: cookie, Origin: base, 'Content-Type': 'application/json'
 }, body: JSON.stringify({ name: 'MCP buckwheat', calories: 300, protein: 10, fat: 2, carbohydrates: 60 }) })
@@ -155,6 +183,10 @@ assert.deepEqual(await tool('nutrition_create_entry', chocolateArgs), chocolate)
 assert.equal((await tool('nutrition_search_products', { barcode: external.externalId })).products[0].id, imported.id)
 assert.equal((await tool('nutrition_get_diary', { date: chocolateArgs.date })).entries.length, 1)
 const readToken = await authorize('nutrition.read')
+if (customArguments) {
+  const deniedCustom = await rpc('tools/call', { name: 'nutrition_create_custom_product', arguments: customArguments }, 200, readToken)
+  assert.equal(deniedCustom.result.structuredContent.code, 'insufficient_scope')
+}
 const denied = await rpc('tools/call', { name: 'nutrition_create_product', arguments: importArgs }, 200, readToken)
 assert.equal(denied.result.structuredContent.code, 'insufficient_scope')
 const allowed = await rpc('tools/call', { name: 'nutrition_get_external_product', arguments: { external_id: external.externalId } }, 200, readToken)

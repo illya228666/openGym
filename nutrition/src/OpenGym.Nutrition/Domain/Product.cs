@@ -22,4 +22,6 @@ public sealed class Product
     public string? NutritionSource { get; set; }
     public DateTimeOffset? RetrievedAtUtc { get; set; }
     public string? SourceFingerprint { get; set; }
+    public string? CatalogKey { get; set; }
+    public string? ProvenanceJson { get; set; }
 }
