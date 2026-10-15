@@ -28,6 +28,7 @@ jobs:
           bash -n deploy/opengym-deploy
           bash -n scripts/ci/verify-pr-release.sh
           python3 deploy/test_deploy.py
+          python3 scripts/ci/test_verify_pr_release.py
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -199,7 +200,7 @@ jobs:
   publish:
     if: github.repository == 'illya228666/openGym' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read

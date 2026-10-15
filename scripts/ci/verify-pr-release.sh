@@ -24,34 +24,53 @@ pr_head="$(jq -r '.head.sha' <<< "$pr")"
 [[ "$pr_head" == "${parents[2]}" ]] || die "PR head differs from main merge second parent."
 [[ "$pr_head" =~ ^[a-f0-9]{40}$ && "$tree" =~ ^[a-f0-9]{40}$ ]] || die "Invalid Git SHA."
 
-# GitHub returns the PR head_sha (not the synthetic PR merge SHA) in the runs API.
-runs="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
-    -f event=pull_request -f head_sha="$pr_head" -f per_page=100)" ||
-    die "Cannot query successful PR checks."
-mapfile -t ids < <(jq -r --arg head "$pr_head" \
-    '.workflow_runs[] | select(.status=="completed" and .conclusion=="success" and
-      .head_sha==$head and .path==".github/workflows/ci.yml") | .id' <<< "$runs")
-(( ${#ids[@]} > 0 )) || die "No passing PR workflow for the merged head."
+# The merge may reach main while the PR's CI is still running. Wait for its
+# successful attestation (and artifact availability), never bypass the tree check.
+# Timeout is bounded because a stuck or missing PR check must fail closed.
+max_wait="${PR_RELEASE_MAX_WAIT_SECONDS:-1200}"
+poll="${PR_RELEASE_POLL_SECONDS:-15}"
+[[ "$max_wait" =~ ^[0-9]+$ && "$max_wait" -ge 1 && "$max_wait" -le 2700 ]] ||
+    die "PR_RELEASE_MAX_WAIT_SECONDS must be 1..2700."
+[[ "$poll" =~ ^[0-9]+$ && "$poll" -ge 1 && "$poll" -le 60 ]] ||
+    die "PR_RELEASE_POLL_SECONDS must be 1..60."
+deadline=$(( $(date +%s) + max_wait ))
 verified=0
-for run_id in "${ids[@]}"; do
-    dir="$(mktemp -d)"
-    if gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
-        --name "verified-pr-$pr_number" --dir "$dir" >/dev/null 2>&1; then
-        evidence="$dir/verified-pr-tree.txt"
-        if [[ -f "$evidence" ]] &&
-            grep -Fxq "tree=$tree" "$evidence" &&
-            grep -Fxq "head=$pr_head" "$evidence" &&
-            grep -Fxq "pr=$pr_number" "$evidence"; then
-            verified=1
+echo "Waiting up to $max_wait seconds for the successful PR #$pr_number run and its exact Git tree artifact."
+while :; do
+    if runs="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+        -f event=pull_request -f head_sha="$pr_head" -f per_page=100)"; then
+        jq -e '.workflow_runs | type == "array"' <<< "$runs" >/dev/null ||
+            die "GitHub returned invalid PR workflow data."
+        mapfile -t ids < <(jq -r --arg head "$pr_head" \
+            '.workflow_runs[] | select(.status=="completed" and .conclusion=="success" and
+              .head_sha==$head and .path==".github/workflows/ci.yml") | .id' <<< "$runs")
+        for run_id in "${ids[@]}"; do
+            dir="$(mktemp -d)"
+            if gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+                --name "verified-pr-$pr_number" --dir "$dir" >/dev/null 2>&1; then
+                evidence="$dir/verified-pr-tree.txt"
+                if [[ -f "$evidence" ]] &&
+                    grep -Fxq "tree=$tree" "$evidence" &&
+                    grep -Fxq "head=$pr_head" "$evidence" &&
+                    grep -Fxq "pr=$pr_number" "$evidence"; then
+                    verified=1
+                    echo "Verified PR #$pr_number, workflow $run_id, exact tested tree $tree."
+                    rm -rf "$dir"
+                    break
+                fi
+            fi
             rm -rf "$dir"
-            echo "Verified PR #$pr_number, workflow $run_id, exact tested tree $tree."
-            break
-        fi
+        done
+    else
+        echo "::warning::GitHub API temporarily unavailable; retrying release provenance check." >&2
     fi
-    rm -rf "$dir"
+    [[ "$verified" -eq 1 ]] && break
+    now="$(date +%s)"
+    (( now < deadline )) ||
+        die "Timed out waiting for successful PR #$pr_number CI and matching tree artifact. Publish blocked; rerun publish after PR CI succeeds."
+    remaining=$((deadline - now))
+    if (( remaining < poll )); then sleep "$remaining"; else sleep "$poll"; fi
 done
-[[ "$verified" -eq 1 ]] ||
-    die "No successful PR run attests this exact main Git tree; publishing blocked."
 {
     echo "### Release provenance validated"
     echo "PR #$pr_number completed all CI checks for Git tree \`$tree\`."
