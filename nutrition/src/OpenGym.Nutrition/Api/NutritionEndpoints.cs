@@ -28,7 +28,7 @@ public static class NutritionEndpoints
         api.MapPost("/products", async (ClaimsPrincipal user, NutritionService service, ProductRequest request, CancellationToken ct) =>
         {
             if (request.Id is not null || request.Source is not null || request.FoodState is not null
-                || request.CookingMethod is not null || request.ConfirmedPreparationAnalog)
+                || request.CookingMethod is not null || request.ConfirmedPreparationAnalog || request.DataOrigin is not null)
             {
                 var result = await service.CreateCustomProduct(UserId(user), request, ct);
                 return result.Created ? Results.Created($"/api/nutrition/products/{result.Product.Id}", result.Product) : Results.Ok(result.Product);

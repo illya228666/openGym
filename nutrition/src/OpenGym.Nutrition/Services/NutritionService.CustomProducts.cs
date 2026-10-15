@@ -10,7 +10,7 @@ namespace OpenGym.Nutrition.Services;
 
 public sealed partial class NutritionService
 {
-    /// <summary>Creates or reuses a verified reference food without changing existing definitions or history.</summary>
+    /// <summary>Creates or reuses personal food with honest provenance, without changing existing history.</summary>
     public async Task<(ProductResponse Product, bool Created)> CreateCustomProduct(string userId, ProductRequest request, CancellationToken ct)
     {
         var name = request.Name?.Trim();
@@ -21,20 +21,35 @@ public sealed partial class NutritionService
             || request.FoodState is not ("raw" or "ready" or "cooked")) throw Invalid();
         string[] methods = ["cooked", "roasted", "baked", "grilled", "boiled", "fried", "air_fried", "steamed", "stewed", "braised"];
         if (request.FoodState == "cooked" ? !methods.Contains(request.CookingMethod) : request.CookingMethod is not null) throw Invalid();
-        FoodCompositionClient.ValidateSource(request.Source);
-        var normalized = request with { Name = name, Brand = brand, Source = request.Source! with { Url = FoodCompositionClient.SourceUrl(request.Source!.FoodId) } };
+        var dataOrigin = request.DataOrigin ?? (request.Source is null ? "ai_estimate" : "verified_reference");
+        if (dataOrigin is not ("verified_reference" or "ai_estimate" or "user_provided")) throw Invalid();
+        var reference = dataOrigin == "verified_reference";
+        if (reference || request.Source is not null) FoodCompositionClient.ValidateSource(request.Source);
+        // Keep the legacy serialization (including absent DataOrigin) for existing retry fingerprints.
+        var normalized = request with { Name = name, Brand = brand, Source = request.Source is null ? null
+            : request.Source with { Url = FoodCompositionClient.SourceUrl(request.Source.FoodId) } };
         var fingerprint = Hash(JsonSerializer.Serialize(normalized));
         var replay = await ReplayProduct(userId, request.Id.Value, fingerprint, ct);
         if (replay is not null) return (replay, false);
 
-        var verified = await foodComposition.Get(normalized.Source!, ct);
         var nutrients = new Nutrients(request.Calories!.Value, request.Protein!.Value, request.Fat!.Value, request.Carbohydrates!.Value);
-        if (verified.Nutrients != nutrients) throw new NutritionException(400, "source_values_mismatch");
-        var analog = FoodCompositionClient.PreparationAnalog(verified.Source, request.FoodState!, request.CookingMethod, request.ConfirmedPreparationAnalog);
-        var provenance = new ProductProvenance(verified.Source, request.FoodState!, request.CookingMethod, analog);
-        // Names may be translated. Source identity, brand and preparation determine reuse, not display text.
-        var catalogKey = Hash(JsonSerializer.Serialize(new { normalized.Source!.Provider, normalized.Source.FoodId,
-            normalized.FoodState, normalized.CookingMethod, Brand = brand?.ToUpperInvariant() }));
+        FoodSource? source = normalized.Source is null ? null : new(normalized.Source.Provider, normalized.Source.FoodId,
+            normalized.Source.Url, "", "", "unverified_reference", null);
+        var analog = false;
+        if (reference)
+        {
+            var verified = await foodComposition.Get(normalized.Source!, ct);
+            if (verified.Nutrients != nutrients) throw new NutritionException(400, "source_values_mismatch");
+            source = verified.Source;
+            analog = FoodCompositionClient.PreparationAnalog(source, request.FoodState!, request.CookingMethod, request.ConfirmedPreparationAnalog);
+        }
+        var provenance = new ProductProvenance(source, request.FoodState!, request.CookingMethod, analog, dataOrigin);
+        // Reference keys retain their old identity; estimates reuse normalized food identity and preparation.
+        var catalogKey = reference
+            ? Hash(JsonSerializer.Serialize(new { normalized.Source!.Provider, normalized.Source.FoodId,
+                normalized.FoodState, normalized.CookingMethod, Brand = brand?.ToUpperInvariant() }))
+            : Hash(JsonSerializer.Serialize(new { DataOrigin = dataOrigin, Name = ProductSearch.Normalize(name),
+                Brand = ProductSearch.Normalize(brand ?? ""), normalized.FoodState, normalized.CookingMethod }));
         for (var attempt = 0; attempt < 3; attempt++)
         {
             replay = await ReplayProduct(userId, request.Id.Value, fingerprint, ct);
@@ -44,15 +59,15 @@ public sealed partial class NutritionService
             if (product is not null)
             {
                 if (product.IsDeleted) throw new NutritionException(410, "product_deleted");
-                if (ReadProvenance(product.ProvenanceJson)?.Source.VerificationStatus != "source_verified_reference"
+                if (reference && (ReadProvenance(product.ProvenanceJson)?.Source?.VerificationStatus != "source_verified_reference"
                     || product.Calories != nutrients.Calories || product.Protein != nutrients.Protein
-                    || product.Fat != nutrients.Fat || product.Carbohydrates != nutrients.Carbohydrates)
+                    || product.Fat != nutrients.Fat || product.Carbohydrates != nutrients.Carbohydrates))
                     throw new NutritionException(409, "product_definition_conflict");
             }
             else
             {
                 product = new Product { Id = request.Id.Value, UserId = userId, Name = name, Brand = brand,
-                    SearchText = ProductSearch.Normalize(name + " " + brand + " " + verified.Source.Description),
+                    SearchText = ProductSearch.Normalize(name + " " + brand + " " + source?.Description),
                     BrandSearchText = ProductSearch.Normalize(brand ?? ""),
                     Calories = nutrients.Calories, Protein = nutrients.Protein, Fat = nutrients.Fat, Carbohydrates = nutrients.Carbohydrates,
                     CatalogKey = catalogKey, ProvenanceJson = JsonSerializer.Serialize(provenance) };

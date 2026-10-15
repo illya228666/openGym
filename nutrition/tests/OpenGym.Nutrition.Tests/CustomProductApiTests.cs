@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -8,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using OpenGym.Nutrition.Api;
 using OpenGym.Nutrition.Authentication;
 using OpenGym.Nutrition.Services;
+using OpenGym.Nutrition.Persistence;
 using Xunit;
 
 namespace OpenGym.Nutrition.Tests;
@@ -17,6 +20,102 @@ public sealed class CustomProductApiTests
     private static ProductRequest Chicken() => new("Cooked chicken breast", null, 165, 31.02m, 3.57m, 0,
         Guid.NewGuid(), new("usda", "171077", FoodCompositionClient.SourceUrl("171077")), "cooked", "roasted");
 
+    [Theory]
+    [InlineData("ai_estimate")]
+    [InlineData("user_provided")]
+    [InlineData(null)]
+    public async Task OfflineValuesCreateReuseAndSnapshotWithoutSource(string? origin)
+    {
+        using var factory = new CustomFactory();
+        factory.Source.Unreachable = true;
+        using var alice = factory.Client("alice");
+        using var bob = factory.Client("bob");
+        var body = Chicken() with { Source = null, CookingMethod = "air_fried", DataOrigin = origin };
+        Assert.Empty((await alice.GetFromJsonAsync<ProductPage>("/api/nutrition/products"))!.Products);
+        var product = await Create(alice, body);
+        Assert.Equal(origin ?? "ai_estimate", product.Provenance!.DataOrigin);
+        Assert.Null(product.Provenance.Source);
+        Assert.False(product.Provenance.PreparationAnalog);
+        var retry = await alice.PostAsJsonAsync("/api/nutrition/products", body);
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        Assert.Equal(product, await retry.Content.ReadFromJsonAsync<ProductResponse>());
+        var aliasBody = body with { Id = Guid.NewGuid(), Name = "  COOKED  CHICKEN BREAST ", Calories = 170 };
+        var alias = await alice.PostAsJsonAsync("/api/nutrition/products", aliasBody);
+        Assert.Equal(HttpStatusCode.OK, alias.StatusCode);
+        Assert.Equal(product, await alias.Content.ReadFromJsonAsync<ProductResponse>());
+        Assert.Equal(product, await (await alice.PostAsJsonAsync("/api/nutrition/products", aliasBody)).Content.ReadFromJsonAsync<ProductResponse>());
+        Assert.Single((await alice.GetFromJsonAsync<ProductPage>("/api/nutrition/products"))!.Products);
+        var consumption = new CreateEntryRequest(Guid.NewGuid(), product.Id, 150, "2026-10-15", null);
+        var entryResult = await alice.PostAsJsonAsync("/api/nutrition/entries", consumption);
+        Assert.Equal(HttpStatusCode.Created, entryResult.StatusCode);
+        var entry = (await entryResult.Content.ReadFromJsonAsync<EntryResponse>())!;
+        Assert.Equal(new Nutrients(247.5m, 46.53m, 5.355m, 0), entry.Nutrition);
+        Assert.Equal(product.Provenance, entry.Provenance);
+        Assert.Equal(entry, await (await alice.PostAsJsonAsync("/api/nutrition/entries", consumption)).Content.ReadFromJsonAsync<EntryResponse>());
+        Assert.Single((await alice.GetFromJsonAsync<DiaryResponse>("/api/nutrition/diary?date=2026-10-15"))!.Entries);
+        Assert.Equal(HttpStatusCode.NotFound, (await bob.GetAsync("/api/nutrition/products/" + product.Id)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await bob.PostAsJsonAsync("/api/nutrition/entries", consumption)).StatusCode);
+        Assert.Empty((await bob.GetFromJsonAsync<ProductPage>("/api/nutrition/products"))!.Products);
+        Assert.Equal(product.Id, (await Create(bob, body)).Id);
+        await Error(alice, body with { Calories = 170 }, "idempotency_conflict", HttpStatusCode.Conflict);
+        var edited = await alice.PutAsJsonAsync("/api/nutrition/products/" + product.Id, new ProductRequest("Updated", null, 200, 30, 5, 0));
+        Assert.Equal(HttpStatusCode.OK, edited.StatusCode);
+        Assert.Equal("user_provided", (await edited.Content.ReadFromJsonAsync<ProductResponse>())!.Provenance!.DataOrigin);
+        Assert.Equal(entry, await alice.GetFromJsonAsync<EntryResponse>("/api/nutrition/entries/" + entry.Id));
+        await alice.DeleteAsync("/api/nutrition/products/" + product.Id);
+        await Error(alice, body, "product_deleted", HttpStatusCode.Gone);
+        Assert.Equal(0, factory.Source.Calls);
+    }
+
+    [Fact]
+    public async Task OnlyVerifiedClaimsNeedSourceChecksAndEstimatesStayUnverified()
+    {
+        using var factory = new CustomFactory();
+        using var client = factory.Client("alice");
+        var body = Chicken() with { DataOrigin = "verified_reference" };
+        await Error(client, body with { Source = null }, "unsupported_source");
+        await Error(client, body with { Calories = 166 }, "source_values_mismatch");
+        factory.Source.Unreachable = true;
+        await Error(client, body, "source_unavailable", HttpStatusCode.ServiceUnavailable);
+        var calls = factory.Source.Calls;
+        var estimate = await Create(client, body with { DataOrigin = "ai_estimate", Calories = 166, CookingMethod = "air_fried" });
+        Assert.Equal("ai_estimate", estimate.Provenance!.DataOrigin);
+        Assert.Equal("unverified_reference", estimate.Provenance.Source!.VerificationStatus);
+        Assert.Null(estimate.Provenance.Source.VerifiedAtUtc);
+        Assert.Equal(calls, factory.Source.Calls);
+        await Error(client, body with { Id = Guid.NewGuid(), Source = null, DataOrigin = "laboratory" }, "invalid_input");
+        await Error(client, body with { Id = Guid.NewGuid(), Source = null, DataOrigin = "ai_estimate", Protein = null }, "invalid_input");
+    }
+
+    [Fact]
+    public async Task LegacyFingerprintAndStoredProvenanceRemainCompatible()
+    {
+        using var factory = new CustomFactory();
+        using var client = factory.Client("alice");
+        var body = Chicken();
+        var product = await Create(client, body);
+        var oldRequestJson = JsonSerializer.Serialize(new { body.Name, body.Brand, body.Calories, body.Protein,
+            body.Fat, body.Carbohydrates, body.Id, body.Source, body.FoodState, body.CookingMethod, body.ConfirmedPreparationAnalog });
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<NutritionDbContext>();
+        var key = await db.ProductCreations.FindAsync("alice", body.Id!.Value);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(oldRequestJson))), key!.Fingerprint);
+        var oldProvenance = JsonSerializer.Serialize(new { product.Provenance!.Source, product.Provenance.FoodState,
+            product.Provenance.CookingMethod, product.Provenance.PreparationAnalog });
+        var persisted = await db.Products.FindAsync("alice", product.Id);
+        persisted!.ProvenanceJson = oldProvenance;
+        await db.SaveChangesAsync();
+        factory.Source.Unreachable = true;
+        var replay = await client.PostAsJsonAsync("/api/nutrition/products", body);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal(product, await replay.Content.ReadFromJsonAsync<ProductResponse>());
+        Assert.Equal("verified_reference", (await client.GetFromJsonAsync<ProductResponse>("/api/nutrition/products/" + product.Id))!.Provenance!.DataOrigin);
+        persisted.ProvenanceJson = JsonSerializer.Serialize(new { Source = product.Provenance!.Source! with { VerificationStatus = "user_edited" },
+            product.Provenance.FoodState, product.Provenance.CookingMethod, product.Provenance.PreparationAnalog });
+        await db.SaveChangesAsync();
+        Assert.Equal("user_provided", (await client.GetFromJsonAsync<ProductResponse>("/api/nutrition/products/" + product.Id))!.Provenance!.DataOrigin);
+    }
+
     [Fact]
     public async Task VerifiedCreationThen150GramsKeepsHistoricalProvenance()
     {
@@ -25,7 +124,7 @@ public sealed class CustomProductApiTests
         var body = Chicken();
         var product = await Create(client, body);
         Assert.Equal(body.Id, product.Id);
-        Assert.Equal("source_verified_reference", product.Provenance!.Source.VerificationStatus);
+        Assert.Equal("source_verified_reference", product.Provenance!.Source!.VerificationStatus);
         Assert.Equal("SR Legacy", product.Provenance.Source.DataType);
         Assert.Equal("cooked", product.Provenance.FoodState);
         Assert.False(product.Provenance.PreparationAnalog);
@@ -39,7 +138,7 @@ public sealed class CustomProductApiTests
         Assert.Equal(entry, await (await client.PostAsJsonAsync("/api/nutrition/entries", entryRequest)).Content.ReadFromJsonAsync<EntryResponse>());
         var edit = await client.PutAsJsonAsync("/api/nutrition/products/" + product.Id, new ProductRequest("Changed", null, 200, 30, 5, 1));
         Assert.Equal(HttpStatusCode.OK, edit.StatusCode);
-        Assert.Equal("user_edited", (await edit.Content.ReadFromJsonAsync<ProductResponse>())!.Provenance!.Source.VerificationStatus);
+        Assert.Equal("user_edited", (await edit.Content.ReadFromJsonAsync<ProductResponse>())!.Provenance!.Source!.VerificationStatus);
         await client.DeleteAsync("/api/nutrition/products/" + product.Id);
         var changedEntry = await client.PutAsJsonAsync("/api/nutrition/entries/" + entry.Id, new UpdateEntryRequest(100, "2026-10-15", null, null));
         var retained = (await changedEntry.Content.ReadFromJsonAsync<EntryResponse>())!;
@@ -122,7 +221,7 @@ public sealed class CustomProductApiTests
         foreach (var url in new[] { "http://127.0.0.1/private", "https://169.254.169.254/latest/meta-data/", "https://fdc.nal.usda.gov.evil/food-details/171077/nutrients",
             "https://user@fdc.nal.usda.gov/food-details/171077/nutrients", FoodCompositionClient.SourceUrl("171077") + "?redirect=evil" })
             await Error(client, body with { Source = body.Source! with { Url = url } }, "unsupported_source");
-        await Error(client, body with { Source = null }, "unsupported_source");
+        await Error(client, body with { Source = null, DataOrigin = "verified_reference" }, "unsupported_source");
         await Error(client, body with { Source = body.Source! with { FoodId = "../private" } }, "unsupported_source");
         await Error(client, body with { Source = body.Source! with { Provider = "ai" } }, "unsupported_source");
         Assert.Equal(0, factory.Source.Calls);
@@ -139,7 +238,7 @@ public sealed class CustomProductApiTests
         var saved = await Create(client, body with { ConfirmedPreparationAnalog = true });
         Assert.True(saved.Provenance!.PreparationAnalog);
         Assert.Equal("air_fried", saved.Provenance.CookingMethod);
-        Assert.Contains("roasted", saved.Provenance.Source.Description);
+        Assert.Contains("roasted", saved.Provenance.Source!.Description);
         await Error(client, Chicken() with { FoodState = "raw", CookingMethod = null, ConfirmedPreparationAnalog = true }, "food_state_mismatch");
         factory.Source.Description = "Chicken breast, raw";
         await Error(client, Chicken() with { ConfirmedPreparationAnalog = true }, "food_state_mismatch");

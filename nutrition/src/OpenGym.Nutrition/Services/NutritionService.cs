@@ -53,7 +53,7 @@ public sealed partial class NutritionService(NutritionDbContext db, FoodComposit
     {
         // The existing UI can edit values, but cannot retain a server-verified claim afterwards.
         if (request.Id is not null || request.Source is not null || request.FoodState is not null
-            || request.CookingMethod is not null || request.ConfirmedPreparationAnalog) throw Invalid();
+            || request.CookingMethod is not null || request.ConfirmedPreparationAnalog || request.DataOrigin is not null) throw Invalid();
         var name = request.Name?.Trim();
         var brand = string.IsNullOrWhiteSpace(request.Brand) ? null : request.Brand.Trim();
         if (string.IsNullOrEmpty(name) || name.Length > 200 || brand?.Length > 100
@@ -75,7 +75,8 @@ public sealed partial class NutritionService(NutritionDbContext db, FoodComposit
         {
             var provenance = ReadProvenance(product.ProvenanceJson)!;
             product.ProvenanceJson = JsonSerializer.Serialize(provenance with
-                { Source = provenance.Source with { VerificationStatus = "user_edited" } });
+                { DataOrigin = "user_provided", Source = provenance.Source is null ? null
+                    : provenance.Source with { VerificationStatus = "user_edited" } });
         }
         if (!id.HasValue) db.Products.Add(product);
         await db.SaveChangesAsync(ct);
@@ -215,7 +216,13 @@ public sealed partial class NutritionService(NutritionDbContext db, FoodComposit
         entry.ProvenanceJson = product.ProvenanceJson;
     }
 
-    private static ProductProvenance? ReadProvenance(string? json) => json is null ? null : JsonSerializer.Deserialize<ProductProvenance>(json);
+    private static ProductProvenance? ReadProvenance(string? json)
+    {
+        var provenance = json is null ? null : JsonSerializer.Deserialize<ProductProvenance>(json);
+        // Legacy manual edits predate DataOrigin and must not inherit a verified claim.
+        return provenance is { DataOrigin: "verified_reference", Source.VerificationStatus: "user_edited" }
+            ? provenance with { DataOrigin = "user_provided" } : provenance;
+    }
     private static ProductResponse ProductView(Product p) => new(p.Id, p.Name, p.Brand, p.Calories, p.Protein, p.Fat, p.Carbohydrates,
         p.ExternalSource, p.ExternalId, p.Barcode, p.PackageQuantity, p.SourceUrl, p.NutritionSource, p.RetrievedAtUtc, p.SourceFingerprint, ReadProvenance(p.ProvenanceJson));
     private static EntryResponse EntryView(DiaryEntry e)

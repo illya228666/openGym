@@ -147,7 +147,7 @@ Remote-only Nutrition tools:
 | `nutrition_get_external_product` | Exact `external_id`; checked `per100Grams`, `canImport`, `issues` and `fingerprint` |
 | `nutrition_create_product` | `source: "openfoodfacts"`, `external_id`, `fingerprint`; imports or reuses a personal product without accepting model-supplied nutrients |
 | `nutrition_search_reference_foods` | English `search`; USDA non-branded candidates and complete per-100g values when available |
-| `nutrition_create_custom_product` | Stable `product_id` UUID, name/optional brand, complete nutrients, USDA `source`, `food_state`, optional `cooking_method`; independently verified and deduplicated by the API |
+| `nutrition_create_custom_product` | Stable `product_id`, name/optional brand, complete nutrients, `food_state`, optional `cooking_method`, `data_origin`: ai_estimate/user_provided/verified_reference; `source` required only for verified_reference |
 | `nutrition_get_product` | `product_id` from catalog results |
 | `nutrition_get_diary` | Explicit local `date` (`YYYY-MM-DD`); entries and service-computed totals |
 | `nutrition_get_entry` | `entry_id`; inspect before edit/delete |
@@ -155,15 +155,16 @@ Remote-only Nutrition tools:
 | `nutrition_update_entry` | `entry_id`, complete quantity/date/time; optional intentional product replacement |
 | `nutrition_delete_entry` | Exact `entry_id` and `confirmed: true` after confirmation |
 
-Search the personal catalog first. If absent, search USDA, inspect food identity and
-preparation, create a verified custom product, then call `nutrition_create_entry`
-with its **returned ID** and eaten grams/date. Values are per 100 g, not serving/piece
-weights. Missing data must not become zeroes; do not substitute industrial products
-for homemade food or convert raw mass to cooked without known yields. Different
-cooking methods require user confirmation before `confirmed_preparation_analog: true`;
-raw/cooked mismatch cannot be overridden. Describe reference averages honestly, not
-as exact lab data for the meal. See [sources and limits](../docs/NUTRITION.md#verified-custom-foods-through-mcp).
-Fully specified entries need no redundant confirmation; ambiguity does. Product and
+Search the personal catalog first, including saved estimates. If absent, reasonable
+AI values can be saved as `ai_estimate`, or the user's values as `user_provided`,
+without source lookup or extra confirmation. USDA/OFF are optional accuracy aids;
+their failure must not block estimated/user data. `verified_reference` retains independent
+USDA verification and its preparation-analog checks. Never label an estimate as verified.
+Then call `nutrition_create_entry` with the **returned ID** and eaten grams/date, and
+confirm the saved food while disclosing estimated values as approximate. Values are
+per 100 g, not piece weights; respect the stated preparation, without guessing raw-to-cooked
+yields. See [provenance and sources](../docs/NUTRITION.md#custom-foods-through-mcp).
+Ordinary delegated estimates need no new trust/permission prompts. Product and
 entry writes are separate: report partial success if diary creation fails.
 
 For “I ate 40 g of Milka,” search the personal catalog first. If missing, search OFF and clarify the exact flavor/package when several plausible products match. Read the selected external ID; only `canImport: true` permits automatic import. Call `nutrition_create_product` with its fingerprint, then `nutrition_create_entry` with `quantity_grams: 40`, a stable entry UUID and the known local date. Once the identity and grams are clear, no extra confirmation is needed. Next time reuse the personal product, including when OFF is unavailable. A single search hit is not proof of identity; incomplete pagination must not conceal alternatives.

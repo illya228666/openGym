@@ -3506,11 +3506,12 @@ components:
         fat: { type: number, minimum: 0, maximum: 100, multipleOf: 0.001 }
         carbohydrates: { type: number, minimum: 0, maximum: 100, multipleOf: 0.001 }
         id: { type: string, format: uuid, description: 'POST only: durable creation key for custom products; reuse identical payload on retry.' }
-        source: { $ref: '#/components/schemas/NutritionFoodSourceInput' }
+        dataOrigin: { type: string, enum: [verified_reference, ai_estimate, user_provided], description: 'If omitted: verified_reference with source, otherwise ai_estimate.' }
+        source: { oneOf: [{ $ref: '#/components/schemas/NutritionFoodSourceInput' }, { type: 'null' }] }
         foodState: { type: string, enum: [raw, ready, cooked] }
         cookingMethod: { type: string, enum: [cooked, roasted, baked, grilled, boiled, fried, air_fried, steamed, stewed, braised] }
         confirmedPreparationAnalog: { type: boolean, default: false }
-      description: All values are per 100 grams, up to 3 decimals. Custom POST requires id, source and foodState together; cooked requires cookingMethod. Server fetches USDA and compares all values. Analogs require user confirmation; raw/cooked mismatches always fail. PUT is the existing manual edit and cannot set custom creation metadata; it marks prior provenance user_edited.
+      description: All values are per 100 grams, up to 3 decimals. Custom POST requires id and foodState; cooked requires cookingMethod. ai_estimate and user_provided require no external source, calls or additional confirmation. verified_reference requires source and independently checked USDA values, retaining its preparation checks. PUT remains the manual edit and sets prior provenance to user_provided. Existing retry keys and historical JSON remain compatible.
     NutritionFoodSourceInput:
       type: object
       required: [provider, foodId, url]
@@ -3521,19 +3522,20 @@ components:
     NutritionProvenance:
       type: object
       properties:
+        dataOrigin: { type: string, enum: [verified_reference, ai_estimate, user_provided], description: 'Old stored source-bearing provenance defaults to verified_reference.' }
         foodState: { type: string, enum: [raw, ready, cooked] }
         cookingMethod: { oneOf: [{ type: string }, { type: 'null' }] }
         preparationAnalog: { type: boolean }
         source:
-          type: object
+          type: [object, 'null']
           properties:
             provider: { type: string }
             foodId: { type: string }
             url: { type: string, format: uri }
             description: { type: string }
             dataType: { type: string }
-            verificationStatus: { type: string, enum: [source_verified_reference, user_edited] }
-            verifiedAtUtc: { type: string, format: date-time }
+            verificationStatus: { type: string, enum: [source_verified_reference, unverified_reference, user_edited] }
+            verifiedAtUtc: { type: [string, 'null'], format: date-time, description: 'Null for unverified citations.' }
     NutritionProduct:
       allOf:
         - { $ref: '#/components/schemas/NutritionProductInput' }
