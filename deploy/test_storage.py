@@ -44,7 +44,7 @@ class StorageTests(unittest.TestCase):
             destination = self.root / 'backup'
             storage.backup(destination)
             self.assertTrue((destination / 'COMPLETE').exists())
-            with closing(storage.connect(destination / 'nutrition.db')) as saved:
+            with storage.connect(destination / 'nutrition.db') as saved:
                 self.assertEqual(saved.execute('SELECT Id FROM DiaryEntries ORDER BY Id').fetchall(), [('entry',), ('wal-entry',)])
             storage.preserved(destination)
             (destination / 'api-data.tar.gz').write_bytes(b'broken')
@@ -69,7 +69,8 @@ class StorageTests(unittest.TestCase):
 
     def test_missing_database_is_not_created(self):
         missing = self.root / 'absent.db'
-        with self.assertRaises(sqlite3.OperationalError): storage.connect(missing)
+        with self.assertRaises(sqlite3.OperationalError):
+            with storage.connect(missing): pass
         self.assertFalse(missing.exists())
 
     def test_restore_into_separate_directory_retains_identity_and_live_files(self):

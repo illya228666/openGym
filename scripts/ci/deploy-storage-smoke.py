@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Real CD/Compose against disposable storage only. Requires Linux Docker and CI images."""
 import json
+import importlib.util
+from contextlib import closing
 import os
 from pathlib import Path
 import shutil
 import socket
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -22,6 +25,20 @@ def run(*args, **kwargs):
 
 
 class ComposeStorageSmoke(unittest.TestCase):
+    def test_root_reader_keeps_wal_sidecars_writable_by_application(self):
+        spec = importlib.util.spec_from_file_location('storage', REPO / 'deploy/opengym-storage.py')
+        storage = importlib.util.module_from_spec(spec); spec.loader.exec_module(storage)
+        with tempfile.TemporaryDirectory(prefix='opengym-owner-ci-') as directory:
+            path = Path(directory) / 'nutrition.db'
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute('PRAGMA journal_mode=WAL'); db.execute('CREATE TABLE sample(id INTEGER)')
+            os.chown(path, 1654, 1654)
+            with storage.connect(path) as db: self.assertEqual(db.execute('SELECT COUNT(*) FROM sample').fetchone()[0], 0)
+            for suffix in ('-wal', '-shm'):
+                sidecar = Path(str(path) + suffix)
+                self.assertTrue(sidecar.exists())
+                self.assertEqual((sidecar.stat().st_uid, sidecar.stat().st_gid), (1654, 1654))
+
     def test_real_update_rollback_and_fail_closed_storage(self):
         with tempfile.TemporaryDirectory(prefix='opengym-storage-ci-') as directory:
             root = Path(directory)

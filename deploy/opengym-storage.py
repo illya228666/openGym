@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed storage checks and verified backups for the existing single-host CD."""
 import datetime
-from contextlib import closing
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import os
@@ -30,8 +30,28 @@ def database_path():
     return path
 
 
+@contextmanager
 def connect(path):
-    return sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=15)
+    database = path.resolve()
+    sidecars = [Path(str(database) + suffix) for suffix in ('-wal', '-shm')]
+    absent = [p for p in sidecars if not p.exists()]
+
+    def preserve_sidecar_owner():
+        # A root read-only reader can create WAL/SHM after the last writer exits.
+        # Only repair newly created root-owned sidecars, never existing user files.
+        if hasattr(os, 'geteuid') and os.geteuid() == 0:
+            owner = database.stat()
+            for p in absent:
+                if p.exists() and not p.is_symlink() and p.stat().st_uid == 0:
+                    os.chown(p, owner.st_uid, owner.st_gid, follow_symlinks=False)
+
+    with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=15)) as db:
+        try:
+            db.execute('PRAGMA schema_version').fetchone()
+            preserve_sidecar_owner()
+            yield db
+        finally:
+            preserve_sidecar_owner()
 
 
 def inventory(path, api_data):
@@ -39,7 +59,7 @@ def inventory(path, api_data):
     user_ids = sorted(u['id'] for u in users)
     if not user_ids or not (api_data / 'secret').read_text().strip():
         raise RuntimeError('Expected API accounts/signing key are missing')
-    with closing(connect(path)) as db:
+    with connect(path) as db:
         if db.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
             raise RuntimeError('Nutrition integrity_check failed')
         migrations = [r[0] for r in db.execute('SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId')]
@@ -101,7 +121,7 @@ def verify_backup(directory):
         path = directory / name
         if path.parent != directory or path.is_symlink() or digest(path) != expected:
             raise RuntimeError('Backup checksum mismatch')
-    with closing(connect(directory / 'nutrition.db')) as db:
+    with connect(directory / 'nutrition.db') as db:
         if db.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
             raise RuntimeError('Backup database is corrupt')
     with tarfile.open(directory / 'api-data.tar.gz') as archive:
@@ -126,7 +146,7 @@ def backup(directory):
         raise RuntimeError('Insufficient free disk for a verified backup')
     directory.mkdir(mode=0o700)
     # SQLite backup API includes committed WAL transactions without copying live sidecars.
-    with closing(connect(database)) as source, closing(sqlite3.connect(directory / 'nutrition.db')) as target:
+    with connect(database) as source, closing(sqlite3.connect(directory / 'nutrition.db')) as target:
         source.backup(target)
     with tarfile.open(directory / 'api-data.tar.gz', 'w:gz') as archive:
         archive.add(ROOT / 'data', arcname='data')
@@ -136,7 +156,7 @@ def backup(directory):
     # Re-check identities using the captured API archive, not a concurrently changed live file.
     with tarfile.open(directory / 'api-data.tar.gz') as archive:
         users = sorted(u['id'] for u in json.load(archive.extractfile('data/db.json'))['users'])
-    with closing(connect(directory / 'nutrition.db')) as db:
+    with connect(directory / 'nutrition.db') as db:
         captured = dict(users=users, migrations=[r[0] for r in db.execute('SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId')],
                         **{t: sorted([list(r) for r in db.execute(f'SELECT UserId, Id FROM {t}')]) for t in ('Products', 'DiaryEntries')})
     if any(not set(map(tuple, captured[t])).issubset(set(map(tuple, check_running()[t]))) for t in ('Products', 'DiaryEntries')):
