@@ -19,13 +19,23 @@ from pathlib import Path
 root = Path(os.environ['FIXTURE'])
 state = json.loads((root / 'docker.json').read_text())
 command, *args = sys.argv[1:]
-if command == 'curl':
+if command == 'storage':
+    operation = args[1]
+    if operation == 'check' and (state.get('missing_store') or 'nutrition' not in state['running']):
+        sys.exit(1)
+    if operation == 'backup':
+        destination = Path(args[2]); destination.mkdir(); (destination / 'COMPLETE').touch()
+    if operation == 'rollback-safe' and state.get('schema_changed') and state.get('updates'):
+        sys.exit(1)
+elif command == 'curl':
     if '/branches/main' in args[-1]:
         print(json.dumps({'commit': {'sha': 'a' * 40}}))
     elif '/actions/runs?' in args[-1]:
         print(json.dumps({'workflow_runs': [{'path': '.github/workflows/ci.yml',
             'head_sha': 'a' * 40, 'event': 'push', 'status': 'completed',
             'conclusion': state.get('ci', 'success')}]}))
+    elif any('raw.githubusercontent.com' in a for a in args):
+        Path(args[args.index('-o') + 1]).write_text('release compose\n')
     else:
         print('401')
 elif args[0] == 'pull':
@@ -78,7 +88,7 @@ class DeploymentTests(unittest.TestCase):
         for command in ('docker', 'curl'):
             self.executable(command, f'#!/bin/sh\nexec {sys.executable} {self.root}/mock.py {command} "$@"\n')
         # HTTP/asset checks are mocked; production readiness is checked separately.
-        self.executable('python3', '#!/bin/sh\ncat >/dev/null\nexit 0\n')
+        self.executable('python3', f'#!/bin/sh\nif [ "$#" -gt 1 ]; then exec {sys.executable} {self.root}/mock.py storage "$@"; fi\ncat >/dev/null\nexit 0\n')
         self.executable('sleep', '#!/bin/sh\nexit 0\n')
         self.configure()
 
@@ -87,7 +97,7 @@ class DeploymentTests(unittest.TestCase):
         file.write_text(content)
         file.chmod(0o755)
 
-    def configure(self, nutrition=False, **options):
+    def configure(self, nutrition=True, **options):
         running = {k: 'old-' + k for k in ('api', 'web')}
         if nutrition:
             running['nutrition'] = 'old-nutrition'
@@ -103,12 +113,15 @@ class DeploymentTests(unittest.TestCase):
     def state(self):
         return json.loads((self.root / 'docker.json').read_text())
 
-    def test_legacy_upgrade_and_idempotency(self):
+    def test_release_compose_refresh_and_idempotency(self):
         self.run_deploy()
         self.assertEqual(self.state()['running'], {k: 'new-' + k for k in ('api', 'web', 'nutrition')})
         self.run_deploy()
         self.assertEqual(self.state()['updates'], 1)
         self.assertIn('KEEP=unchanged', (self.root / '.env').read_text())
+        self.assertEqual((self.root / 'compose.prod.yml').read_text(), 'release compose\n')
+        self.assertEqual((self.root / 'state/release-compose').read_text(), 'release compose\n')
+        self.assertTrue((self.root / 'state/previous/backup/COMPLETE').exists())
 
     def test_nutrition_failure_restores_all_three_exact_images(self):
         self.configure(nutrition=True, fail=True)
@@ -118,16 +131,29 @@ class DeploymentTests(unittest.TestCase):
         self.run_deploy()
         self.assertEqual(self.state()['updates'], 2)
 
-    def test_first_upgrade_failure_removes_only_new_nutrition(self):
-        self.configure(fail=True)
+    def test_ephemeral_or_missing_store_never_changes_running_release(self):
+        self.configure(nutrition=False)
         self.run_deploy(success=False)
         self.assertEqual(self.state()['running'], {'api': 'old-api', 'web': 'old-web'})
+        self.assertNotIn('updates', self.state())
         self.assertIn('sha-' + OLD, (self.root / '.env').read_text())
+
+    def test_missing_volume_fails_before_any_container_change(self):
+        self.configure(missing_store=True)
+        self.run_deploy(success=False)
+        self.assertNotIn('updates', self.state())
+
+    def test_schema_change_blocks_automatic_downgrade_and_holds_cd(self):
+        self.configure(fail=True, schema_changed=True)
+        self.run_deploy(success=False)
+        self.assertEqual(self.state()['updates'], 1)
+        self.assertTrue((self.root / 'state/hold').exists())
+        self.assertTrue((self.root / 'state/pending/backup/COMPLETE').exists())
 
     def test_manual_rollback_holds_updates_and_resume_keeps_bad_release_blocked(self):
         self.run_deploy()
         self.run_deploy('--rollback')
-        self.assertEqual(self.state()['running'], {'api': 'old-api', 'web': 'old-web'})
+        self.assertEqual(self.state()['running'], {k: 'old-' + k for k in ('api', 'web', 'nutrition')})
         self.assertTrue((self.root / 'state/hold').exists())
         self.run_deploy()
         self.run_deploy('--resume')
@@ -150,7 +176,7 @@ class DeploymentTests(unittest.TestCase):
         previous = (self.root / 'state/previous').resolve()
         previous.rename(self.root / 'state/pending')
         self.run_deploy()
-        self.assertEqual(self.state()['running'], {'api': 'old-api', 'web': 'old-web'})
+        self.assertEqual(self.state()['running'], {k: 'old-' + k for k in ('api', 'web', 'nutrition')})
         self.assertFalse((self.root / 'state/pending').exists())
 
 if __name__ == '__main__':

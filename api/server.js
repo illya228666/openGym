@@ -96,7 +96,10 @@ const MAX_BODY = 5 * 1024 * 1024;
 // Secure cookies require HTTPS; over plain http://localhost the flag would drop the cookie
 const SECURE = /^https:/i.test(ORIGIN) ? ' Secure;' : '';
 
-fs.mkdirSync(DATA, { recursive: true });
+// Managed production must not become a new empty instance after a lost/wrong mount.
+if (process.env.REQUIRE_EXISTING_DATA === '1') {
+  for (const file of ['db.json', 'secret']) fs.accessSync(path.join(DATA, file), fs.constants.R_OK | fs.constants.W_OK);
+} else fs.mkdirSync(DATA, { recursive: true });
 /* The secrets are locked down file by file rather than by sealing the whole directory.
  *
  * A blanket `chmod 0700` on DATA looks stronger and is worse: ./data is a host bind mount and

@@ -28,6 +28,7 @@ jobs:
           bash -n deploy/opengym-deploy
           bash -n scripts/ci/verify-pr-release.sh
           python3 deploy/test_deploy.py
+          python3 deploy/test_storage.py
           python3 scripts/ci/test_verify_pr_release.py
       - uses: actions/setup-node@v7
         with:
@@ -143,6 +144,9 @@ jobs:
           docker run -d --name nutrition --network opengym-ci -v opengym-ci-nutrition:/data -e OpenGym__ApiBaseUrl=http://api:3000 -e OpenFoodFacts__BaseUrl=http://off-fixture:5099 -e Nutrition__UsdaBaseUrl=http://off-fixture:5099 -e NO_PROXY=api,nutrition,off-fixture,localhost,127.0.0.1 opengym-nutrition:ci
           docker exec -i api node --input-type=module < scripts/ci/nutrition-internal-smoke.mjs
           node scripts/ci/nutrition-smoke.mjs http://localhost:8080 --verify-persistence
+      - name: Verify real Compose deployment, rollback and storage guards on isolated data
+        # Production helper is root-owned and reads the Docker volume's host mountpoint.
+        run: sudo env "PATH=$PATH" python3 scripts/ci/deploy-storage-smoke.py
       - name: Container diagnostics
         if: failure()
         run: |

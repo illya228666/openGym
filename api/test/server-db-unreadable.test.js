@@ -45,6 +45,16 @@ test('db.json cut short with no previous version: the server refuses to start an
   assert.ok(fs.readdirSync(d).some(f => f.startsWith('db.json.unreadable-')));
 });
 
+test('managed production refuses missing accounts or signing key without creating replacements', async t => {
+  for (const file of ['db.json', 'secret']) {
+    const d = dataDir(t);
+    fs.unlinkSync(path.join(d, file));
+    const h = start(t, d, { REQUIRE_EXISTING_DATA: '1' });
+    assert.equal(await h.exit, 1);
+    assert.equal(fs.existsSync(path.join(d, file)), false);
+  }
+});
+
 test('db.json cut short after a save: the copy kept with it is used, and every account is still there', async t => {
   const d = dataDir(t);
   let h = start(t, d);

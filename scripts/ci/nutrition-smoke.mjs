@@ -1,6 +1,7 @@
 // Run only against a throwaway stack with PASSWORD_LOGIN=1: creates a test account.
 // Verifies nginx -> Node -> ASP.NET -> Node /api/me using the real auth implementation.
 import assert from 'node:assert/strict'
+import { readFileSync, writeFileSync } from 'node:fs'
 
 const base = process.argv[2] || 'http://localhost:8080'
 const name = 'Nutrition CI'
@@ -18,6 +19,14 @@ if (process.argv.includes('--verify-persistence')) {
   const day = await diary.json()
   assert.equal(day.entries.length, 1)
   assert.deepEqual(day.totals, { calories: 84, protein: 2, fat: 4, carbohydrates: 6 })
+  if (process.env.NUTRITION_SMOKE_STATE) {
+    const expected = JSON.parse(readFileSync(process.env.NUTRITION_SMOKE_STATE, 'utf8'))
+    const me = await (await call('/api/me', { headers })).json()
+    assert.equal(me.user.id, expected.userId)
+    assert.equal(day.entries[0].id, expected.entryId)
+    assert.equal(day.entries[0].productId, expected.productId)
+    assert.equal((await (await call('/api/nutrition/products?search=CI%20persistence', { headers })).json()).products[0].id, expected.productId)
+  }
   console.log('Nutrition persistent storage survived process/container recreation and repeated migrations.')
   process.exit(0)
 }
@@ -29,6 +38,7 @@ const signup = await call('/api/register/password', {
   body: JSON.stringify({ name, password: 'River stone garden 734!' })
 })
 assert.equal(signup.status, 200, 'Test signup needs PASSWORD_LOGIN=1 and ORIGIN matching this URL')
+const signedUp = await signup.json()
 const cookie = signup.headers.get('set-cookie')?.split(';')[0]
 assert.ok(cookie, 'Signup must issue an existing openGym session cookie')
 const token = cookie.slice(cookie.indexOf('=') + 1)
@@ -59,7 +69,9 @@ await request('/entries/' + entry.id, 'DELETE')
 await request('/entries', 'POST', payload, 410)
 assert.deepEqual((await request('/diary?date=2026-10-14')).totals, { calories: 0, protein: 0, fat: 0, carbohydrates: 0 })
 const persisted = await request('/products', 'POST', { name: 'CI persistence', calories: 42, protein: 1, fat: 2, carbohydrates: 3 }, 201)
-await request('/entries', 'POST', { id: crypto.randomUUID(), productId: persisted.id, quantityGrams: 200, date: '2026-10-15', time: null }, 201)
+const savedEntry = await request('/entries', 'POST', { id: crypto.randomUUID(), productId: persisted.id, quantityGrams: 200, date: '2026-10-15', time: null }, 201)
+if (process.env.NUTRITION_SMOKE_STATE) writeFileSync(process.env.NUTRITION_SMOKE_STATE,
+  JSON.stringify({ userId: signedUp.user.id, productId: persisted.id, entryId: savedEntry.id }))
 const logout = await call('/api/logout/all', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
 assert.equal(logout.status, 200)
 assert.equal((await call('/api/nutrition/hello', { headers: { Authorization: `Bearer ${token}` } })).status, 401)

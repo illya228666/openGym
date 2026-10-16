@@ -202,11 +202,14 @@ this mode; it must run only against disposable storage.
 
 ## SQLite, Docker and migrations
 
-Both Compose files mount `nutrition-data:/data` (normally `opengym_nutrition-data`).
+Both Compose files mount `nutrition-data:/data`. Managed production requires the
+explicit external `opengym_nutrition-data` volume; it never creates it during deploy.
 The image creates `/data` owned by its non-root app user. Docker initializes an empty
 named volume with that ownership. The database is `/data/nutrition.db`; WAL/SHM files
 stay beside it. Container recreation, updates and exact-image rollback retain the
-volume. **Do not use `docker compose down -v` or prune this volume.** If substituting
+volume. Managed production additionally requires an existing initialized database,
+validated mounts and a verified pre-deploy backup; incompatible schema rollback is
+blocked. **Do not use `docker compose down -v` or prune this volume.** If substituting
 a bind mount, create it with permissions for the image's `APP_UID` first.
 
 `Nutrition__DatabasePath` overrides the file path; native development defaults to

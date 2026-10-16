@@ -1,140 +1,141 @@
 # openGym CD on Proxmox
 
-## Existing installation
+Production is Compose in `/opt/opengym`, project `opengym`, LXC 105
+(`saitama`). Only web publishes `8080:80`; the public origin remains
+`https://gym.niichavo.pp.ua`. API and Nutrition are internal services.
 
-Proxmox node `my` runs the unprivileged Debian LXC **105**, `saitama`
-(`192.168.178.72`). Docker Compose project `opengym` lives in `/opt/opengym`.
-The public origin stays **https://gym.niichavo.pp.ua**; the existing Cloudflare
-path and nginx `/api` proxy are unchanged. Only web publishes `8080:80`.
-Node (`3000`) and Nutrition (`8080`) are internal to the Compose network.
+## Release contract
 
-Keep `.env`, `data/` (including the session signing key and passkeys), `media/`
-and `coach-auth/` in place. Nutrition has no user store or volume. Do not run
-the CI registration smoke against production or enable password login for a probe.
+PR CI runs tests, three-image smoke and the isolated production-Compose deployment
+test. Main publication requires a successful PR with the identical Git tree and
+does not repeat tests. CD requires successful main publication, pulls immutable
+`sha-<full SHA>` images and checks all three revisions and actual image IDs.
+A successful Actions run is not proof of deployment.
 
-Management was verified through the local Proxmox MCP: SSH alias `proxmox-ai`,
-host `ssh.niichavo.pp.ua`, user `codexops`, Cloudflare Access ProxyCommand,
-strict SSH host-key checking, then `sudo -n` and `pct exec 105`. There is no
-new inbound webhook, runner, SSH port, registry token or GitHub deployment secret.
+The timer checks ten minutes after the preceding run finishes. `flock` serializes
+transactions. Candidate Compose is downloaded from `deploy/compose.prod.yml`
+at the exact selected SHA and validated before container/config changes.
+`release-compose` is only a last-successful cache, never a deployment input.
+Changes to the host script/helper require explicit installation: releases do not
+execute downloaded host scripts.
 
-## Release selection and health
+## Storage contract
 
-`opengym-deploy.timer` invokes `/usr/local/sbin/opengym-deploy` ten minutes
-after the preceding run finishes. The script reads the current `main` SHA and
-requires a successful **push** run of `.github/workflows/ci.yml` for that exact
-SHA. Before release, a PR runs full tests plus the 3-container integration smoke and
-attests its checked-out Git tree. The main release must verify a merged PR with a
-successful PR CI result for the **identical tree**, then builds and publishes the
-three main-SHA-labelled Docker images without repeating tests or smoke checks.
-Direct pushes, failed PRs and mismatched Git trees cannot publish. Failed/incomplete CI, partial publication or a missing
-image never changes the running release. `latest` is not used by CD.
+- API uses existing `/opt/opengym/data`, `create_host_path: false` and
+  `REQUIRE_EXISTING_DATA=1`. Missing account DB/signing key prevents startup.
+- Nutrition uses external **`opengym_nutrition-data`**, independent of project
+  name, `/data/nutrition.db` and `RequireExistingDatabase=true`. Missing, corrupt,
+  uninitialized or newer-than-application schema prevents startup.
+- Existing `coach-auth` is also a non-auto-created bind. Media, ports, OAuth
+  settings and secrets stay unchanged.
 
-All images use `sha-<full SHA>` and must have that SHA in their OCI revision
-label. The script compares actual running image IDs, serializes deployments
-with `flock`, and snapshots configuration and exact old IDs before switching.
-Readiness checks retry for 120 seconds and cover:
+The storage helper validates effective candidate Compose, actual running mounts,
+expected volume/file, SQLite integrity and Nutrition ownership against API UserIds.
+It checks all existing user/product/entry IDs after update or rollback.
+It never initializes, replaces, merges or restores production data automatically.
+Missing/wrong storage stops deployment before containers change.
 
-- actual running image IDs for all three services;
-- `/api/health`, home HTML and the local assets referenced by it, including
-  Content-Type checks to reject HTML fallbacks;
-- internal Nutrition `/health` returning `ok:true`;
-- internal Nutrition rejecting spoofed identity with 401;
-- public nginx → Node Nutrition endpoint returning 401 without credentials.
+Fresh installation or migration from an ephemeral container requires **manual
+bootstrap**: preserve the whole SQLite directory including WAL/SHM, create and
+verify a consistent standalone backup, provision the external volume, copy without
+overwriting an existing DB, set the image's non-root ownership, and verify IDs
+before enabling managed deployment. Never run `up` first to see whether data
+appears. Never prune volumes or use `down -v`.
 
-No user is registered or modified. Valid-session greeting and revocation are
-covered in CI with disposable users; production probes do not impersonate users.
-Deployments briefly recreate containers; this single-host setup is not zero downtime.
+## Backup before every update
 
-## Installation/update of CD files
+A root-only `backup/` directory accompanies each deployment snapshot:
 
-The tracked `deploy/compose.prod.yml` preserves this host's existing mounts,
-port and settings. It is separate from the source-build Compose file.
-Run as root **inside LXC 105**, with this repository checkout as the current
-directory. Do not replace the existing `.env` with `.env.example`.
+- `nutrition.db`: SQLite backup API includes committed WAL content;
+- `api-data.tar.gz`: complete API data, accounts, state, signing key and grants;
+- `env`, `compose`, `images.json`: settings and exact image metadata;
+- `inventory.json`: ownership, row IDs and migrations;
+- `checksums.json`, `COMPLETE`: SHA-256 manifest and completion marker written last.
 
-```sh
-bash -n deploy/opengym-deploy
-python3 deploy/test_deploy.py                 # fake Docker/HTTP, no production access
-systemctl stop opengym-deploy.timer
-systemctl is-active opengym-deploy.service    # must be inactive; do not interrupt a deployment
-test ! -d /var/lib/opengym-deploy/pending     # recover any old transaction first
-backup=/opt/opengym/cd-backups/$(date -u +%Y%m%dT%H%M%SZ)
-install -d -m 700 "$backup" /var/lib/opengym-deploy
-cp -p /opt/opengym/.env /opt/opengym/compose.prod.yml /usr/local/sbin/opengym-deploy "$backup/"
-cp -p /etc/systemd/system/opengym-deploy.{service,timer} "$backup/"
-tar -C /opt/opengym -czf "$backup/data.tar.gz" data  # protect this backup; contains secrets
-test -f /var/lib/opengym-deploy/legacy-compose || cp -p /opt/opengym/compose.prod.yml /var/lib/opengym-deploy/legacy-compose
-install -m 600 deploy/compose.prod.yml /var/lib/opengym-deploy/release-compose
-cd /opt/opengym
-docker compose --env-file .env -f /var/lib/opengym-deploy/release-compose config --quiet
-```
+Before switching, the helper validates integrity, reads the full compressed archive,
+checks accounts/key/ownership and verifies checksums. Backup failure or insufficient
+disk aborts deployment. API files are atomically replaced by the application.
+Concurrent account changes that make captured stores inconsistent fail backup;
+retry with writes quiesced. This is not a distributed point-in-time transaction.
 
-Then, back in the checkout, install `deploy/opengym-deploy` with mode 755
-to `/usr/local/sbin/opengym-deploy`, install the two units with mode 644 to
-`/etc/systemd/system/`, and copy `deploy/compose.prod.yml` to
-`/opt/opengym/compose.prod.yml` (mode 644). Reload systemd and run:
+After a successful update, keep the latest 14 completed automatic backup sets plus
+`previous` if older. Rotation removes only their backup subdirectories, never
+application data, incident backups, config, images or pending transactions.
+Monitor disk usage: retention limits count, not bytes. Copy backups off the LXC
+using an existing host backup process; local backups cannot survive disk loss.
+
+Offline verification (no private rows or secrets printed):
 
 ```sh
-systemctl daemon-reload
-systemctl enable --now opengym-deploy.timer
-systemctl start opengym-deploy.service
-systemctl show opengym-deploy.service -p Result
-journalctl -u opengym-deploy.service -n 60 --no-pager
-systemctl list-timers opengym-deploy.timer
+python3 /usr/local/sbin/opengym-storage.py verify-backup /path/to/snapshot/backup
 ```
 
-Installing configuration does not itself deploy unverified images. The first
-Nutrition deployment waits for successful main publication. Failed `main` CI
-leaves the former two-service release running, even after CD installation.
+## Rollback and recovery
 
-Remote MCP is opt-in inside the API image, not a fourth image. See
-[MCP setup](../mcp/README.md) for the existing-origin HTTPS/OAuth configuration.
-With MCP enabled, the updated script also checks protected-resource discovery
-and a `401` authentication challenge through nginx before declaring readiness;
-it creates no grants or diary records. Install the updated script when releasing
-this feature. Configuration and script changes in a `dev` checkout do not enable
-MCP or update this host automatically.
-
-## Rollback and pause
-
-On startup/update failure the script restores the prior `.env`, Compose file
-and exact image IDs, verifies readiness, and blocks the failed SHA in
-`/var/lib/opengym-deploy/failed-releases`. A pending transaction is recovered
-before consulting GitHub, including after SIGKILL or reboot. Failed recovery
-retains the snapshot and logs `CRITICAL`; investigate before clearing it.
-
-After a successful update, the `previous` link points at the last snapshot:
+CD restores prior Compose, env and exact images after failure **only when applied
+migration IDs are unchanged** and a verified backup exists. It never rolls back
+SQLite automatically. Even additive migrations conservatively block automatic
+downgrade: inspect compatibility first. A schema change retains `pending` and its
+backup, writes `hold` and logs a critical failure without starting older code.
+Pre-fix snapshots lacking persistent storage/verified backups cannot be rolled back
+automatically. Failed release SHAs remain blocked.
 
 ```sh
 systemctl stop opengym-deploy.timer
 /usr/local/sbin/opengym-deploy --rollback
-```
-
-This sets a persistent `hold`, restores and verifies the previous release,
-and blocks the release just reverted. On the first Nutrition update rollback
-removes only the newly introduced, stateless Nutrition container; old api/web,
-all user data, media and authentication remain. No volumes are removed.
-Before the first successful update there is no `previous` release snapshot:
-use the installation backup if the CD files themselves must be reverted.
-
-Once investigated, resume automatic checks:
-
-```sh
+# Only after investigation, with no incompatible pending transaction:
 /usr/local/sbin/opengym-deploy --resume
 systemctl enable --now opengym-deploy.timer
 ```
 
-The failed SHA remains blocked; prefer a new fixed main commit. To retry the
-same SHA deliberately, remove only its exact line from `failed-releases` after
-investigation. Protect state/backup directories (root-only); do not prune old
-Docker images while their IDs are needed for rollback. Snapshot rollback is
-an application/configuration rollback, **not a database restore**. Future
-schema migrations need a separate compatible data-backup/restore plan.
+Explicit database recovery:
+
+1. Stop the timer, ensure no deployment holds the deploy lock, preserve all of
+   `pending`. Do not use `--resume` to bypass an incompatible transaction.
+2. Verify the selected backup. Extract API data into a **new staging directory**,
+   not over live data. Inspect the standalone DB's migrations/IDs read-only;
+   use saved image/config metadata to select a compatible release.
+3. Stop API and Nutrition to quiesce writes; preserve current full stores,
+   SQLite WAL/SHM and configuration in a separate incident backup. Obtain explicit
+   approval: restoring loses subsequent writes and may revoke newer sessions/grants.
+4. Restore API and SQLite as a coherent pair. Move existing DB **and sidecars**
+   aside together; never place an old standalone DB beside a newer WAL. Preserve
+   modes/ownership (current Nutrition UID/GID 1654) and keep originals recoverable.
+5. Start compatible exact images/config. Check mounts, integrity, ownership,
+   row IDs, authenticated reads and an approved write before resolving pending
+   state and resuming CD. Prefer a forward fix if restore would discard new writes.
+
+There is no automated database merge or downgrade.
+
+## Installing host files
+
+Use the verified checkout, keep the existing env, stop the timer and ensure the
+deployment service is inactive. Back up current host files and complete the
+one-time persistent-store bootstrap if needed.
+
+```sh
+install -m 755 deploy/opengym-deploy /usr/local/sbin/opengym-deploy
+install -m 755 deploy/opengym-storage.py /usr/local/sbin/opengym-storage.py
+docker compose --project-name opengym --project-directory /opt/opengym \
+  --env-file /opt/opengym/.env -f deploy/compose.prod.yml config --quiet
+```
+
+Timer/service units do not need changing. Active Compose must satisfy the managed
+storage contract before resuming updates. Do not overwrite production Compose from
+an unverified checkout; the deployment transaction selects release-SHA Compose.
 
 ## Verification scope
 
-`python3 deploy/test_deploy.py` checks the actual Bash transaction using fake
-Docker and HTTP: first upgrade/idempotency, three-image rollback, pre-Nutrition
-rollback, manual pause/resume, CI gating, OCI mismatch and interrupted recovery.
-Run production HTTP probes separately; the unit harness mocks those boundaries.
-Do not treat these checks as an authenticated production-user acceptance test.
+`deploy/test_deploy.py` exercises real Bash with fake Docker/HTTP.
+`deploy/test_storage.py` uses disposable SQLite/API files for WAL backup,
+corruption, staged restore, owner/schema guards and rotation.
+`scripts/ci/deploy-storage-smoke.py` exercises the real Bash transaction with real
+Compose and CI images, replacing only GitHub discovery/download and registry pulls.
+It verifies IDs/UserId, Compose refresh, rollback, failed-deploy recovery and
+storage/project-name guards in unique isolated paths/volume/project; no production
+data and no volume deletion.
+
+Readiness checks API, frontend HTML/assets/content types, Nutrition health,
+spoofed-identity rejection, and opt-in MCP discovery/challenge through nginx.
+Production probes do not register accounts or copy sessions. Authenticated MCP
+acceptance needs a functioning user-owned connector.

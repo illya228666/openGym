@@ -23,11 +23,20 @@ services:
     environment:
       PORT: "3000"
       DATA_DIR: /data
+      REQUIRE_EXISTING_DATA: "1"
       TRUST_PROXY: "1"
       NUTRITION_URL: http://nutrition:8080
     volumes:
-      - ./data:/data
-      - ./coach-auth:/coach-auth
+      - type: bind
+        source: /opt/opengym/data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /opt/opengym/coach-auth
+        target: /coach-auth
+        bind:
+          create_host_path: false
 
   nutrition:
     image: ghcr.io/illya228666/opengym-nutrition:${IMAGE_TAG}
@@ -35,6 +44,8 @@ services:
     environment:
       OpenGym__ApiBaseUrl: http://api:3000
       NO_PROXY: api,nutrition,localhost,127.0.0.1
+      Nutrition__DatabasePath: /data/nutrition.db
+      Nutrition__RequireExistingDatabase: "true"
     volumes:
       - nutrition-data:/data
 
@@ -58,3 +69,5 @@ services:
 
 volumes:
   nutrition-data:
+    name: opengym_nutrition-data
+    external: true
