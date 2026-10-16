@@ -8,6 +8,7 @@ Production is Compose in `/opt/opengym`, project `opengym`, LXC 105
 
 PR CI runs tests, three-image smoke and the isolated production-Compose deployment
 test. Main publication requires a successful PR with the identical Git tree and
+Merge PRs using **Create a merge commit** (two parents), not squash/rebase; the release gate verifies the merged PR head and its exact tested tree.
 does not repeat tests. CD requires successful main publication, pulls immutable
 `sha-<full SHA>` images and checks all three revisions and actual image IDs.
 A successful Actions run is not proof of deployment.
