@@ -300,14 +300,81 @@ public sealed class DiaryApiTests
         Assert.Single((await Day(bob)).Entries);
     }
 
+    [Fact]
+    public void ManagedStartupDoesNotCreateMissingDatabase()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "nutrition-missing-" + Guid.NewGuid(), "test.db");
+        using var factory = new DiaryFactory(path, requireExisting: true);
+        var error = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+        Assert.Contains("database is missing", error.Message);
+        Assert.False(File.Exists(path));
+    }
+
+    [Theory]
+    [InlineData("corrupt")]
+    [InlineData("uninitialized")]
+    [InlineData("newer-schema")]
+    public async Task ManagedStartupRejectsUnsafeDatabaseWithoutReplacingIt(string scenario)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "nutrition-unsafe-" + Guid.NewGuid());
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "test.db");
+        try
+        {
+            if (scenario == "corrupt") File.WriteAllText(path, "not a database");
+            else
+            {
+                using (var initial = new DiaryFactory(path))
+                using (var client = initial.Client("alice")) await CreateProduct(client);
+                using var db = new SqliteConnection("Data Source=" + path);
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = scenario == "uninitialized" ? "DELETE FROM __EFMigrationsHistory" :
+                    "INSERT INTO __EFMigrationsHistory VALUES ('20990101000000_FutureSchema', '10.0.0')";
+                command.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+            var before = File.ReadAllBytes(path);
+            using (var factory = new DiaryFactory(path, requireExisting: true))
+            {
+                if (scenario == "corrupt") Assert.Throws<SqliteException>(() => factory.CreateClient());
+                else Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+            }
+            SqliteConnection.ClearAllPools();
+            Assert.Equal(before, File.ReadAllBytes(path));
+        }
+        finally { SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task ManagedRestartPreservesEntriesAndUserIsolation()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "nutrition-managed-" + Guid.NewGuid());
+        var path = Path.Combine(directory, "test.db");
+        try
+        {
+            EntryResponse entry;
+            using (var initial = new DiaryFactory(path))
+            using (var alice = initial.Client("alice")) entry = await CreateEntry(alice, Consumption((await CreateProduct(alice)).Id));
+            using var restarted = new DiaryFactory(path, requireExisting: true);
+            using var aliceAgain = restarted.Client("alice");
+            using var bob = restarted.Client("bob");
+            Assert.Equal(entry, Assert.Single((await Day(aliceAgain)).Entries));
+            Assert.Empty((await Day(bob)).Entries);
+        }
+        finally { SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
+    }
+
     private sealed class DiaryFactory : WebApplicationFactory<Program>
     {
         private readonly bool ownsDirectory;
         private readonly string database;
-        public DiaryFactory(string? path = null)
+        private readonly bool requireExisting;
+        public DiaryFactory(string? path = null, bool requireExisting = false)
         {
             ownsDirectory = path is null;
             database = path ?? Path.Combine(Path.GetTempPath(), "nutrition-diary-" + Guid.NewGuid(), "test.db");
+            this.requireExisting = requireExisting;
         }
         public HttpClient Client(string user)
         {
@@ -318,6 +385,7 @@ public sealed class DiaryApiTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseSetting("Nutrition:DatabasePath", database);
+            builder.UseSetting("Nutrition:RequireExistingDatabase", requireExisting.ToString());
             builder.ConfigureServices(services => services.AddHttpClient(OpenGymAuthenticationHandler.ClientName)
                 .ConfigurePrimaryHttpMessageHandler(() => new AuthBackend()));
         }

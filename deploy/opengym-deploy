@@ -16,6 +16,7 @@ READY_TIMEOUT_SECONDS=120
 mkdir -p "$STATE"
 chmod 700 "$STATE"
 COMPOSE=(docker compose --project-name opengym --env-file .env -f compose.prod.yml)
+STORAGE=/usr/local/sbin/opengym-storage.py
 
 github_get() {
     curl -fsSL --retry 2 --connect-timeout 5 --max-time 30 \
@@ -145,7 +146,7 @@ wait_ready() {
 }
 
 finish_snapshot() {
-    local finished="$STATE/rollback-$(date -u +%Y%m%dT%H%M%SZ)-$"
+    local finished="$STATE/rollback-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     # Preserve the last coherent release for manual rollback; rename commits the transaction.
     mv -T "$PENDING" "$finished" || return 1
     ln -sfn "$(basename "$finished")" "$STATE/previous.new" || return 1
@@ -155,20 +156,28 @@ finish_snapshot() {
 rollback() {
     local api_id web_id nutrition_id services=(api web)
     echo 'Restoring previous configuration and exact image IDs.'
+    # Container rollback cannot undo migrations or recover a previously ephemeral database.
+    if [[ ! -f $PENDING/backup/COMPLETE ]] || ! python3 "$STORAGE" rollback-safe "$PENDING/backup"; then
+        touch "$STATE/hold"
+        echo 'CRITICAL: no compatible verified data snapshot; automatic rollback paused.' >&2
+        return 1
+    fi
+    python3 "$STORAGE" config "$PENDING/compose" || return 1
     api_id=$(jq -r '.services.api.image' "$PENDING/images.json") || return 1
     web_id=$(jq -r '.services.web.image' "$PENDING/images.json") || return 1
     nutrition_id=$(jq -r '.services.nutrition.image // empty' "$PENDING/images.json") || return 1
     cp -p "$PENDING/compose" compose.prod.yml.new && mv -f compose.prod.yml.new compose.prod.yml || return 1
     if [[ -n $nutrition_id ]]; then
         services+=(nutrition)
-    elif docker inspect opengym-nutrition-1 >/dev/null 2>&1; then
-        # The pre-Nutrition release had no such container or persistent volume.
-        timeout -k 5 30 docker rm -f opengym-nutrition-1 || return 1
+    else
+        echo 'Refusing legacy rollback without a persistent Nutrition release.' >&2
+        return 1
     fi
     cp -p "$PENDING/env" .env.new && mv -f .env.new .env || return 1
     timeout -k 5 90 "${COMPOSE[@]}" -f "$PENDING/images.json" \
         up -d --no-deps --pull never "${services[@]}" || return 1
     wait_ready "$api_id" "$web_id" "$nutrition_id" || return 1
+    python3 "$STORAGE" verify "$PENDING/backup" || return 1
     mv "$PENDING" "$STATE/recovered-$(date -u +%Y%m%dT%H%M%SZ)-$$" || return 1
     echo 'Rollback verified.'
 }
@@ -232,6 +241,13 @@ if [[ -f $STATE/failed-releases ]] && grep -Fxq "$NEW" "$STATE/failed-releases";
     exit 0
 fi
 
+# Fetch the Compose belonging to this immutable release, never a stale installation cache.
+CANDIDATE=$STATE/candidate-compose
+curl -fsSL --retry 2 --connect-timeout 5 --max-time 30 \
+    "https://raw.githubusercontent.com/illya228666/openGym/$SHA/deploy/compose.prod.yml" -o "$CANDIDATE.new"
+python3 "$STORAGE" check "$CANDIDATE.new"
+mv -f "$CANDIDATE.new" "$CANDIDATE"
+
 # Pull failures are transient, not evidence that the release is broken.
 for service in api web nutrition; do
     timeout -k 5 120 docker pull "ghcr.io/illya228666/opengym-$service:$NEW"
@@ -242,7 +258,7 @@ done
 NEW_API=$(docker image inspect -f '{{.Id}}' "ghcr.io/illya228666/opengym-api:$NEW")
 NEW_NUTRITION=$(docker image inspect -f '{{.Id}}' "ghcr.io/illya228666/opengym-nutrition:$NEW")
 NEW_WEB=$(docker image inspect -f '{{.Id}}' "ghcr.io/illya228666/opengym-web:$NEW")
-if running_images_match "$NEW_API" "$NEW_WEB" "$NEW_NUTRITION"; then
+if running_images_match "$NEW_API" "$NEW_WEB" "$NEW_NUTRITION" && cmp -s "$CANDIDATE" compose.prod.yml; then
     wait_ready "$NEW_API" "$NEW_WEB" "$NEW_NUTRITION"
     set_tag "$NEW"
     echo "Already up to date and ready: $NEW"
@@ -265,6 +281,7 @@ fi
 wait_ready "$OLD_API" "$OLD_WEB" "$OLD_NUTRITION"
 echo "Deploying actual sha-$OLD_SHA -> $NEW"
 snapshot=$(mktemp -d "$STATE/snapshot.XXXXXX")
+python3 "$STORAGE" backup "$snapshot/backup"
 cp -p .env "$snapshot/env"
 cp -p compose.prod.yml "$snapshot/compose"
 if [[ -z $OLD_NUTRITION && -f $STATE/legacy-compose ]]; then
@@ -276,10 +293,13 @@ jq -n --arg api "$OLD_API" --arg web "$OLD_WEB" --arg nutrition "$OLD_NUTRITION"
 printf '%s\n' "$NEW" > "$snapshot/target"
 mv "$snapshot" "$PENDING"
 set_tag "$NEW"
-# Restore the tracked three-service configuration after a pre-Nutrition rollback.
-cp -p "$STATE/release-compose" compose.prod.yml.new
+cp -p "$CANDIDATE" compose.prod.yml.new
 mv -f compose.prod.yml.new compose.prod.yml
 timeout -k 5 90 "${COMPOSE[@]}" up -d --no-deps --pull never api web nutrition
 wait_ready "$NEW_API" "$NEW_WEB" "$NEW_NUTRITION"
+python3 "$STORAGE" verify "$PENDING/backup"
+cp -p compose.prod.yml "$STATE/release-compose.new"
+mv -f "$STATE/release-compose.new" "$STATE/release-compose"
 finish_snapshot
+python3 "$STORAGE" rotate
 echo "Deployment successful and ready: $NEW"

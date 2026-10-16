@@ -30,9 +30,16 @@ builder.Services.AddAuthentication(OpenGymAuthenticationHandler.SchemeName)
 builder.Services.AddAuthorization();
 builder.Services.Configure<Microsoft.AspNetCore.Routing.RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 var databasePath = Path.GetFullPath(builder.Configuration["Nutrition:DatabasePath"] ?? "data/nutrition.db");
-Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+var requireExistingDatabase = builder.Configuration.GetValue<bool>("Nutrition:RequireExistingDatabase");
+if (requireExistingDatabase && !File.Exists(databasePath))
+    throw new InvalidOperationException("Expected Nutrition database is missing. Restore the persistent store; refusing to initialize an empty database.");
+if (!requireExistingDatabase) Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
 builder.Services.AddDbContext<NutritionDbContext>(options => options.UseSqlite(
-    new SqliteConnectionStringBuilder { DataSource = databasePath, DefaultTimeout = 5 }.ToString()));
+    new SqliteConnectionStringBuilder
+    {
+        DataSource = databasePath, DefaultTimeout = 5,
+        Mode = requireExistingDatabase ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadWriteCreate
+    }.ToString()));
 builder.Services.AddScoped<NutritionService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<OpenFoodFacts>();
@@ -65,6 +72,18 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<NutritionDbContext>();
+    if (requireExistingDatabase)
+    {
+        await db.Database.OpenConnectionAsync();
+        using var check = db.Database.GetDbConnection().CreateCommand();
+        check.CommandText = "PRAGMA integrity_check";
+        if (!string.Equals(await check.ExecuteScalarAsync() as string, "ok", StringComparison.Ordinal))
+            throw new InvalidOperationException("Nutrition database integrity check failed.");
+        var applied = (await db.Database.GetAppliedMigrationsAsync()).ToArray();
+        if (applied.Length == 0 || applied.Except(db.Database.GetMigrations()).Any())
+            throw new InvalidOperationException("Nutrition schema is uninitialized or newer than this application. A compatible release or explicit recovery is required.");
+        await db.Database.CloseConnectionAsync();
+    }
     // Single service instance: fail startup on migration failure rather than serve an empty database.
     await db.Database.MigrateAsync();
     // Nullable brand search marks legacy rows. Bounded, resumable backfill runs before serving;
