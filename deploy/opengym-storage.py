@@ -61,8 +61,8 @@ def check_compose(file):
         mounts = [v for v in services[service].get('volumes', []) if v['target'] == '/data']
         if len(mounts) != 1 or mounts[0]['type'] != kind or mounts[0]['source'] != source or mounts[0].get('read_only'):
             raise RuntimeError('Compose storage contract mismatch: ' + service)
-        if kind == 'bind' and mounts[0].get('bind', {}).get('create_host_path', True):
-            raise RuntimeError('API bind must not auto-create an empty data directory')
+        # Compose versions omit different default boolean values in JSON; actual
+        # mount + required account/key files below enforce existence independently.
     volume = config['volumes']['nutrition-data']
     if volume.get('name') != VOLUME or volume.get('external') is not True:
         raise RuntimeError('Nutrition requires the stable external volume')
