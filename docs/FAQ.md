@@ -81,6 +81,18 @@ Yes. Everyone creates their own profile and sees only their own data. You can ma
 invite-only and give yourself an admin dashboard; see
 [multiple users](SELF_HOSTING.md#4-multiple-users).
 
+### Why does the ChatGPT OpenGym connection ask me to sign in again?
+
+ChatGPT connects to a self-hosted OpenGym MCP server using OAuth. It may request the
+`offline_access` permission without sending `prompt=consent`; the OpenGym authorization page
+still asks you to approve access before the server issues a renewable connection.
+
+Instances running the older OAuth implementation could give ChatGPT a short-lived access token
+without a refresh token. After upgrading the OpenGym server, disconnect and reconnect the
+existing ChatGPT connection **once**: an old access token cannot be upgraded retroactively.
+New connections can refresh automatically, while revocation and the selected permissions
+continue to apply. This does not require deleting workout data or resetting Docker volumes.
+
 ### How do I update?
 
 `git pull && docker compose pull && docker compose up -d`. Your data is untouched. See
