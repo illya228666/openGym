@@ -110,7 +110,7 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
   assert.equal(metadata.registration_endpoint, issuer + '/reg');
   const registration = await request('/oauth/reg', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ client_name: 'Automatic test', redirect_uris: ['https://client.example/callback'],
-      token_endpoint_auth_method: 'none', scope: 'training.read nutrition.read nutrition.write offline_access' }) });
+      token_endpoint_auth_method: 'none', scope: 'openid offline_access training.read nutrition.read nutrition.write' }) });
   assert.equal(registration.status, 201, await registration.clone().text());
   const registered = await registration.json();
   assert.ok(registered.client_id);
@@ -120,6 +120,16 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
     response_type: 'code', scope: 'training.read', resource };
   const noPkce = await request('/oauth/auth?' + new URLSearchParams(authParams));
   assert.equal(new URL(noPkce.headers.get('location')).searchParams.get('error'), 'invalid_request');
+  const noPkceOffline = await request('/oauth/auth?' + new URLSearchParams({
+    ...authParams, scope: 'openid offline_access training.read'
+  }));
+  assert.equal(new URL(noPkceOffline.headers.get('location')).searchParams.get('error'), 'invalid_request');
+  const promptNone = await request('/oauth/auth?' + new URLSearchParams({ ...authParams,
+    scope: 'openid offline_access training.read', prompt: 'none',
+    code_challenge: crypto.randomBytes(32).toString('base64url'), code_challenge_method: 'S256'
+  }));
+  assert.ok(['login_required', 'consent_required'].includes(
+    new URL(promptNone.headers.get('location')).searchParams.get('error')));
   const badRedirect = await request('/oauth/auth?' + new URLSearchParams({ ...authParams, redirect_uri: 'https://evil.example/callback' }));
   assert.equal(badRedirect.status, 400);
   assert.equal(badRedirect.headers.get('location'), null);
@@ -128,7 +138,7 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
   assert.equal(wrongResource.status, 303);
   assert.equal(new URL(wrongResource.headers.get('location')).searchParams.get('error'), 'invalid_target');
 
-  async function connect(uid, scope, wrongProof = false, clientId = 'test-client') {
+  async function connect(uid, scope, wrongProof = false, clientId = 'test-client', prompt = 'consent') {
     const verifier = crypto.randomBytes(32).toString('base64url');
     const jar = new Map([['gymsid', mint(uid)]]);
     const fetchBrowser = async (url, options = {}) => {
@@ -143,7 +153,7 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
     let response = await fetchBrowser('/oauth/auth?' + new URLSearchParams({ client_id: clientId,
       redirect_uri: 'https://client.example/callback', response_type: 'code', scope: scope + ' offline_access',
       resource, code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'),
-      code_challenge_method: 'S256', state: 'test-state', prompt: 'consent' }));
+      code_challenge_method: 'S256', state: 'test-state', ...(prompt === null ? {} : { prompt }) }));
     if (origin.startsWith('https:')) assert.match(response.headers.getSetCookie().join(';'), /; secure;/i);
     let code;
     for (let step = 0; step < 12; step++) {
@@ -220,6 +230,23 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
   assert.equal((await request('/mcp', { method: 'POST', headers: { Origin: 'https://evil.example', Authorization: 'Bearer ' + alice.access_token } })).status, 403);
   const automatic = await connect('bob', 'training.read', false, registered.client_id);
   assert.equal((await rpc(automatic.access_token, 'tools/list')).status, 200);
+  // Match ChatGPT's OIDC authorization: all MCP scopes, offline_access, PKCE, no prompt parameter.
+  const chatgpt = await connect('bob', 'openid training.read nutrition.read nutrition.write', false, registered.client_id, null);
+  assert.equal((await rpc(chatgpt.access_token, 'tools/list')).status, 200);
+  const chatgptGrants = await (await request('/api/mcp/connections', {
+    headers: { Cookie: 'gymsid=' + mint('bob') }
+  })).json();
+  assert.ok(chatgptGrants.connections.some(connection => connection.clientId === registered.client_id
+    && ['training.read', 'nutrition.read', 'nutrition.write'].every(scope => connection.scopes.includes(scope))));
+  const chatgptRefresh = await request('/oauth/token', { method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', client_id: registered.client_id,
+      refresh_token: chatgpt.refresh_token, resource }) });
+  assert.equal(chatgptRefresh.status, 200, log);
+  const chatgptRotated = await chatgptRefresh.json();
+  assert.ok(chatgptRotated.refresh_token);
+  assert.notEqual(chatgptRotated.refresh_token, chatgpt.refresh_token);
+  assert.equal((await rpc(chatgptRotated.access_token, 'tools/list')).status, 200);
   assert.equal((await saveSettings('admin', { enabled: false })).status, 200);
   assert.equal((await rpc(automatic.access_token, 'tools/list')).status, 404);
   assert.equal((await request('/oauth/token')).status, 404);
@@ -262,6 +289,8 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
   assert.equal(repeated.status, 400);
   assert.equal((await repeated.json()).error, 'invalid_grant');
   assert.equal((await rpc(latest.access_token, 'tools/list')).status, 401);
+  assert.match(log, /OAuth error .*"phase":"token".*"grantType":"refresh_token".*"status":400.*"code":"invalid_grant"/);
+  assert.ok(!log.includes(replayTokens.refresh_token), 'OAuth log must not reveal refresh tokens');
   await request('/api/logout/all', { method: 'POST', headers: { Authorization: 'Bearer ' + mint('bob'), 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal((await request('/api/me', { headers: { Cookie: 'gymsid=' + mint('bob') } })).status, 401);
   assert.equal((await rpc(bob.access_token, 'tools/list')).status, 200);
