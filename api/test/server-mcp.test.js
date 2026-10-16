@@ -110,7 +110,7 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
   assert.equal(metadata.registration_endpoint, issuer + '/reg');
   const registration = await request('/oauth/reg', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ client_name: 'Automatic test', redirect_uris: ['https://client.example/callback'],
-      token_endpoint_auth_method: 'none', scope: 'training.read nutrition.read nutrition.write offline_access' }) });
+      token_endpoint_auth_method: 'none', scope: 'openid offline_access training.read nutrition.read nutrition.write' }) });
   assert.equal(registration.status, 201, await registration.clone().text());
   const registered = await registration.json();
   assert.ok(registered.client_id);
