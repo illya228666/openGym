@@ -84,6 +84,17 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
   });
   provider.proxy = true;
   provider.on('server_error', (_ctx, error) => console.error('OAuth server error', error.code || error.name, error.syscall || ''));
+  // Report only bounded protocol metadata, never authorization codes, tokens, or request bodies.
+  const logOAuthError = (phase, ctx, error) => {
+    const type = ctx?.oidc?.params?.grant_type;
+    const grantType = ['authorization_code', 'refresh_token'].includes(type) ? type : 'other';
+    const rawCode = error?.error;
+    const code = typeof rawCode === 'string' && /^[a-z_]{1,40}$/.test(rawCode) ? rawCode : 'server_error';
+    const status = Number.isInteger(error?.statusCode) ? error.statusCode : 400;
+    console.warn('OAuth error', JSON.stringify({ phase, ...(phase === 'token' ? { grantType } : {}), status, code }));
+  };
+  provider.on('grant.error', (ctx, error) => logOAuthError('token', ctx, error));
+  provider.on('authorization.error', (ctx, error) => logOAuthError('authorize', ctx, error));
   const registrationBudget = createWindow({ max: 60, windowMs: 3600000 });
   const callback = provider.callback();
   async function verify(token, scope) {
@@ -145,6 +156,18 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
     // Both interactions and provider routes must see the configured public origin, not proxy input.
     req.headers['x-forwarded-proto'] = resource.protocol.slice(0, -1);
     req.headers['x-forwarded-host'] = resource.host;
+    const incomingUrl = req.url;
+    // ChatGPT requests offline_access without prompt=consent. Ensure the provider
+    // retains offline_access by requiring explicit consent before issuing durable refresh tokens.
+    // Never override an explicit prompt (particularly prompt=none).
+    if (pathname === '/oauth/auth' && req.method === 'GET') {
+      const authorizationUrl = new URL(req.url, resource.origin);
+      if (!authorizationUrl.searchParams.has('prompt')
+        && (authorizationUrl.searchParams.get('scope') || '').split(/\s+/).includes('offline_access')) {
+        authorizationUrl.searchParams.set('prompt', 'consent');
+        req.url = authorizationUrl.pathname + authorizationUrl.search;
+      }
+    }
     req.originalUrl = prefix + req.url;
     if (pathname === '/oauth/reg' && req.method === 'POST') {
       if (registrationBudget.take('global') || store.list('Client').length >= MaxDynamicClients) {
@@ -191,9 +214,8 @@ export function createMcpOAuth({ data, secret, origin, publicUrl, clients = [], 
       } else json(res, 403, { error: 'account_changed_restart_authorization' });
       return true;
     }
-    const original = req.url;
     req.url = req.url.slice('/oauth'.length);
-    try { await callback(req, res); } finally { req.url = original; }
+    try { await callback(req, res); } finally { req.url = incomingUrl; req.originalUrl = prefix + incomingUrl; }
     return true;
   }
   async function readForm(req) {
