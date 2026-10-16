@@ -145,7 +145,8 @@ jobs:
           docker exec -i api node --input-type=module < scripts/ci/nutrition-internal-smoke.mjs
           node scripts/ci/nutrition-smoke.mjs http://localhost:8080 --verify-persistence
       - name: Verify real Compose deployment, rollback and storage guards on isolated data
-        run: python3 scripts/ci/deploy-storage-smoke.py
+        # Production helper is root-owned and reads the Docker volume's host mountpoint.
+        run: sudo env "PATH=$PATH" python3 scripts/ci/deploy-storage-smoke.py
       - name: Container diagnostics
         if: failure()
         run: |

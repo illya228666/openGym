@@ -15,7 +15,10 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def run(*args, **kwargs):
-    return subprocess.run(args, check=True, text=True, capture_output=True, **kwargs).stdout
+    result = subprocess.run(args, text=True, capture_output=True, **kwargs)
+    if result.returncode:
+        raise AssertionError(f'Isolated command failed: {args}\n{result.stdout}\n{result.stderr}')
+    return result.stdout
 
 
 class ComposeStorageSmoke(unittest.TestCase):
