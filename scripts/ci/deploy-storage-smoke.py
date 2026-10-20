@@ -46,7 +46,6 @@ class ComposeStorageSmoke(unittest.TestCase):
             volume = project + '-nutrition'
             state = root / 'state'; state.mkdir()
             (root / 'data').mkdir(); (root / 'coach-auth').mkdir()
-            for media in ('img', 'gif'): (root / 'media' / media).mkdir(parents=True)
             with socket.socket() as sock:
                 sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
             base = f'http://127.0.0.1:{port}'

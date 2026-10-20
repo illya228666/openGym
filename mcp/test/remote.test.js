@@ -1,6 +1,7 @@
 import { test, expect } from 'vitest'
 import { z } from 'zod'
 import { createTrainingTools } from '../src/tools.js'
+import { exOr } from '../../frontend/src/lib/exercises.js'
 import { createNutritionTools } from '../src/nutrition.js'
 import http from 'node:http'
 import { createHttpMcp } from '../src/http.js'
@@ -81,6 +82,24 @@ test('request-scoped training preserves same-ID custom exercise ownership', asyn
   expect(first.exercises[0].name).toBe('Alice exercise')
   expect(second.exercises[0].name).toBe('Bob exercise')
   expect(routine(alice).exercises[0].name).toBe('Alice exercise')
+})
+
+test('request-scoped previews isolate custom exercise load steps between profiles', async () => {
+  const state = (name, weight) => ({ unit: 'kg', workouts: [], exWeights: {},
+    routines: [{ id: 'r', name: 'Routine', prog: 'off',
+      ex: [{ id: 'shared-custom', sets: 3, reps: 8, weight, warmupSets: 2 }] }],
+    customEx: [{ id: 'shared-custom', n: name, bp: 'upper legs', eq: 'barbell', tg: 'quads', sm: [] }] })
+  const alice = createTrainingTools({ getState: () => state('Alice squat', 90) })
+  const bob = createTrainingTools({ getState: () => state('Bob squat', 60) })
+  const preview = tools => tools.find(tool => tool.name === 'preview_session')
+    .handler({ routine_id: 'r', date: '2026-10-20' }).exercises[0]
+  const [first, second, again] = await Promise.all([alice, bob, alice].map(tools => Promise.resolve().then(() => preview(tools))))
+  expect(first.name).toBe('Alice squat')
+  expect(first.opening_sets.filter(row => row.phase === 'warmup').map(row => row.w)).toEqual([45, 65])
+  expect(second.name).toBe('Bob squat')
+  expect(second.opening_sets.filter(row => row.phase === 'work').map(row => row.w)).toEqual([60, 60, 60])
+  expect(again).toEqual(first)
+  expect(exOr('shared-custom').missing).toBe(true)
 })
 
 test('HTTP MCP validates writes and reports unknown outcomes without changing retry IDs', async ({ onTestFinished }) => {

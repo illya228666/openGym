@@ -1,4 +1,4 @@
-/* The eight read-only tools. Each handler returns JSON; labels.js pre-substitutes any
+/* The nine read-only tools. Each handler returns JSON; labels.js pre-substitutes any
    {0}/{1} template the lib returns so the LLM gets final text, not template strings.
    ISO dates are validated on the way in; the handlers never see 'yesterday'. */
 import { z } from 'zod'
@@ -35,9 +35,8 @@ const isoDate = () => z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-D
 )
 
 // A custom exercise lives in S.customEx and is merged into EXIDX by registerCustom() at
-// store load (useStore.js:54). The MCP server deliberately never calls it: http.js serves
-// several profiles with request-scoped state, so mutating the module-global
-// index would leak one profile's customs into another's reads.
+// store load. HTTP serves several profiles, so ordinary reads resolve customs from the caller's
+// state; only the synchronous session builder temporarily indexes them (withCustomsIndexed).
 const customOf = (id, S) => (S.customEx || []).find(ex => ex.id === id)
 // exOr's miss is a placeholder object, not null — callers that only need a name are fine
 // with it, callers feeding muscle resolution are NOT. Use customOf directly there.
