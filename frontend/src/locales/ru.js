@@ -1,5 +1,7 @@
 // Russian UI strings. Keys are the English source strings (see lib/i18n.js).
 export default {
+  'Create, edit and delete completed workouts': 'Создание, изменение и удаление завершённых тренировок',
+  'Not specified': 'Не указано',
   'Add the MCP URL in your AI client, sign in to OpenGym and approve the requested permissions. OAuth registration is automatic.': 'Добавь URL MCP в AI-клиент, войди в OpenGym и подтверди запрошенные разрешения. OAuth-клиент регистрируется автоматически.',
   'The switch applies immediately. Turning MCP off preserves connections but blocks new requests.': 'Переключатель действует сразу. Отключение MCP сохраняет подключения, но блокирует новые запросы.',
   "MCP": "MCP",

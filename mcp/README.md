@@ -3,7 +3,7 @@
 Two entrances share the same tool registration and training handlers:
 
 - **Local stdio:** the original nine read-only training tools, using `OPENGYM_DATA` and `OPENGYM_UID`.
-- **Remote Streamable HTTP:** opt-in `/mcp` inside the existing Node API, with OAuth delegation and twelve Nutrition API tools. No fourth application image, new account system or published internal port.
+- **Remote Streamable HTTP:** opt-in `/mcp` inside the existing Node API, with OAuth delegation, completed-workout editing and twelve Nutrition API tools. No fourth application image, new account system or published internal port.
 
 Training statistics still use the pure functions in `frontend/src/lib/`. Remote calls obtain the verified user's snapshot through Node's existing state reader, not an AI-supplied user ID. State is scoped to one request; custom exercise names cannot leak through a global registry. Nutrition uses its existing HTTP API, historical snapshots, decimal totals and retry rules. MCP never opens SQLite or calculates nutrients.
 
@@ -47,8 +47,8 @@ docker build -f api/Dockerfile .
 3. Add that URL as an OAuth MCP connection in ChatGPT or another compatible client. Leave manual client ID/secret fields empty; registration is automatic.
 4. Sign in to the existing OpenGym account and approve the requested permissions.
 
-The initial connection challenge requests `training.read`, `nutrition.read` and
-`nutrition.write`; all three are shown on the consent page. Registration does not
+The initial connection challenge requests `training.read`, `training.write`, `nutrition.read` and
+`nutrition.write`; all four are shown on the consent page. Registration does not
 grant these permissions automatically, and existing read-only grants are not upgraded.
 Consent CSP permits only the already validated callback origin alongside `'self'`,
 so Chrome can follow the form's OAuth redirect without allowing arbitrary destinations.
@@ -101,7 +101,8 @@ Consumed refresh tokens are retained for 30 days from use. Reuse within that win
 
 | Scope | Access |
 |---|---|
-| `training.read` | Nine training tools |
+| `training.read` | Nine original training tools plus remote exercise search |
+| `training.write` | Create, patch and confirm deletion of completed workouts |
 | `nutrition.read` | Personal products, entries and daily totals |
 | `nutrition.write` | Single-entry create, update and confirmed delete |
 
@@ -139,6 +140,43 @@ Original names and calculation behavior are preserved:
 | `muscle_balance` | Trained and neglected muscles |
 
 Ask `preview_session` before advising a weight: stored routine weight may differ from the opening prescription. JSON is returned as text and `structuredContent`. Training “today” uses the **process timezone**, not each user's timezone. Set `TZ`; explicit dates avoid ambiguity.
+
+### Completed-workout diary (remote only)
+
+| Tool | Input / behavior |
+|---|---|
+| `search_exercises` | English `query`, optional `limit`; catalogue and current profile's existing custom exercises, without media |
+| `create_workout` | Stable UUID `workout_id`, explicit `unit`, `date` and `entries`; only already completed work |
+| `update_workout` | `workout_id`, `expected_version`, stable UUID `operation_id`, `unit` and changed fields only |
+| `delete_workout` | The same identity/version fields, plus `confirmed: true` after reading and user confirmation |
+
+Reconnect/re-authorize with `training.write` to enable writes. Existing grants never gain this
+permission automatically. Local stdio remains read-only. The diary does not create exercises,
+change programmes or synchronize an active workout.
+
+Use `get_workout.editing` for the editable projection, its `version`, `entry_id` and `set_id`.
+`entry_id` identifies an occurrence, not the catalogue exercise (which remains `exercise_id`).
+Updates preserve omitted fields, including existing targets, set types, supersets and attachments.
+Entries/sets without IDs are appended; IDs in `remove_entry_ids` / `remove_set_ids` explicitly
+remove them. New sets default to completed. Supported fields include reps (`w`, `r`), time
+(`sec`), cardio (`min`, `speed`, `km`), warmups, failure, drops, rest-pause and `sides.L/R`.
+For ambiguous two-bell loads specify `db_load: each|total|as`; never guess the user's meaning.
+
+Dates are explicit `YYYY-MM-DD`; resolve relative dates in the user's known timezone, not the
+server's. Optional `start_time` requires an offset and a matching calendar date. Missing start
+and duration remain unknown, not midnight or a fabricated hour. `duration_minutes` can be
+stored without a start (`durationMs` internally); either can be filled later or cleared with
+`null`. Existing timestamp-based records keep their normal duration behavior.
+
+Repeat the identical create payload and UUID after a lost response. A different payload with
+that UUID conflicts; a deleted UUID cannot be recreated while its sync tombstone is retained.
+For updates, repeat the identical payload and operation UUID: the last operation is recognized
+unless intervening changes occurred. A `409` requires reading again; do not silently overwrite
+or append with a new UUID. Versions also include the profile's unit. Legacy history is not
+mass-migrated: version-bound references become persisted occurrence/set IDs on first edit.
+Writes use the API's strict reader and synchronous durable sync commit, including revisions,
+write IDs, deletion stamps, cache eviction and media-reference bookkeeping. Success is returned
+only after saving; uncertain failures require retrying the same request.
 
 Remote-only Nutrition tools:
 

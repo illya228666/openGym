@@ -7,7 +7,7 @@ import {
   fmt, setLabel, exLine, muscleName, policyName, friendlyDuration, ratio, muscleOrder
 } from './labels.js'
 import {
-  modeOf, workoutVolume, setsDone, effectiveRoutine, effectiveRoutineIds, lastEntryFor, workoutAt
+  modeOf, workoutVolume, workoutDuration, setsDone, effectiveRoutine, effectiveRoutineIds, lastEntryFor, workoutAt
 } from '../../frontend/src/lib/history.js'
 import { queueView, queueNext, pinState } from '../../frontend/src/lib/queue.js'
 import { exOr, registerCustom } from '../../frontend/src/lib/exercises.js'
@@ -18,6 +18,7 @@ import {
 import { loadOfWorkouts, rankOf, levelsOf } from '../../frontend/src/lib/muscles.js'
 import { policyFor } from '../../frontend/src/lib/progression.js'
 import { buildSessionEntries, startsFromLast } from '../../frontend/src/lib/session-start.js'
+import { editableWorkout, workoutKey, searchExerciseTool } from './training.js'
 
 const localContext = { getState: localState, getUser: localUser }
 /* ---------- helpers ---------- */
@@ -292,7 +293,7 @@ export const listWorkouts = {
         // The only thing that identifies a session uniquely. Two workouts on one day is
         // ordinary — a lifting session and an evening run — and without an id here the second
         // one cannot be asked about at all.
-        id: w.id || null,
+        id: workoutKey(w),
         date: w.d,
         routine_id: w.routineId || null,
         routine_name: w.name || null,
@@ -301,8 +302,8 @@ export const listWorkouts = {
         sets_planned: plannedSets(w),
         sets_ratio: ratio(setsDone(w), plannedSets(w)),
         volume: workoutVolume(w),
-        duration_ms: w.end && w.start ? (w.end - w.start) : null,
-        duration: w.end && w.start ? friendlyDuration(w.end - w.start) : null,
+        duration_ms: workoutDuration(w) || null,
+        duration: workoutDuration(w) ? friendlyDuration(workoutDuration(w)) : null,
         prs: (w.prs || []).length,
         bodyweight_at_workout: w.bw || null
       }))
@@ -330,7 +331,7 @@ export const getWorkout = {
     const workouts = S.workouts || []
     let w
     if (workout_id) {
-      w = workouts.find(x => x.id === workout_id)
+      w = workouts.find(x => workoutKey(x) === workout_id)
       if (!w) { const e = new Error(`no workout with id ${workout_id}`); e.code = 'ENOENT'; throw e }
     } else if (date) {
       const sameDay = workouts.filter(x => x.d === date)
@@ -343,7 +344,7 @@ export const getWorkout = {
           date,
           message: `${sameDay.length} workouts were logged on ${date} — call get_workout again with one of these workout_id values.`,
           workouts: sameDay.map(x => ({
-            id: x.id || null,
+            id: workoutKey(x),
             routine_name: x.name || null,
             sets_done: setsDone(x),
             volume: workoutVolume(x),
@@ -356,7 +357,8 @@ export const getWorkout = {
       const e = new Error('get_workout needs either workout_id or date'); e.code = 'EINVAL'; throw e
     }
     return {
-      id: w.id || null,
+      id: workoutKey(w),
+      editing: editableWorkout(w, S),
       date: w.d,
       routine_id: w.routineId || null,
       routine_name: w.name || null,
@@ -365,7 +367,7 @@ export const getWorkout = {
       volume: workoutVolume(w),
       sets_done: setsDone(w),
       sets_planned: plannedSets(w),
-      duration: w.end && w.start ? friendlyDuration(w.end - w.start) : null,
+      duration: workoutDuration(w) ? friendlyDuration(workoutDuration(w)) : null,
       prs: (w.prs || []).map(id => {
         const ex = exerciseOf(id, S)
         return ex.missing ? id : ex.n
@@ -684,5 +686,6 @@ function noState() {
 }
 /** Bind reads to one caller. Never replace module-global state for an HTTP request. */
 export function createTrainingTools(context) {
-  return TOOLS.map(tool => ({ ...tool, handler: params => tool.handler(params, context) }))
+  return [...TOOLS.map(tool => ({ ...tool, handler: params => tool.handler(params, context) })),
+    { ...searchExerciseTool, handler: params => searchExerciseTool.handler(params, context.getState()) }]
 }

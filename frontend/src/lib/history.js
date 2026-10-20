@@ -779,7 +779,8 @@ export function workoutDay(w) {
 export function workoutDuration(w) {
   const start = timestampOf(w?.start)
   const end = timestampOf(w?.end)
-  return start !== null && end !== null ? Math.max(0, end - start) : 0
+  return start !== null && end !== null ? Math.max(0, end - start)
+    : Number.isFinite(w?.durationMs) && w.durationMs > 0 ? w.durationMs : 0
 }
 
 // A unilateral row counts as two toward the "x / y sets" progress — one per side — since each
