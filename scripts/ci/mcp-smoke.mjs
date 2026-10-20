@@ -7,6 +7,18 @@ const target = new URL(base)
 assert.ok(process.argv.includes('--disposable') && target.protocol === 'http:' &&
   ['localhost', '127.0.0.1'].includes(target.hostname), 'Explicit --disposable and a loopback HTTP stack are required')
 const call = (path, options = {}) => fetch(base + path, { ...options, redirect: 'manual', signal: AbortSignal.timeout(15000) })
+// Exercise media are baked into web, never fetched from a dataset at container startup.
+for (const [path, mime] of [['still/0025.webp', 'image/webp'], ['clip/0025.mp4', 'video/mp4']]) {
+  const response = await call('/exercise-media/' + path, { headers: { Range: 'bytes=0-0' } })
+  assert.equal(response.status, 206)
+  assert.match(response.headers.get('content-type'), new RegExp('^' + mime))
+  assert.equal(response.headers.get('cross-origin-resource-policy'), 'same-origin')
+  assert.match(response.headers.get('cache-control'), /immutable/)
+  await response.body.cancel()
+}
+const notice = await call('/exercise-media/NOTICE.md')
+assert.equal(notice.status, 200)
+assert.match(await notice.text(), /Gym visual/)
 // The disposable stack creates its administrator first (before Nutrition account smoke).
 const adminName = 'MCP admin ' + crypto.randomUUID().slice(0, 8)
 const password = 'MCP River stone garden 734!'

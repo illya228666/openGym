@@ -39,6 +39,22 @@ for (const dict of locales.values()) for (const k of Object.keys(dict)) seen.set
 const union = [...seen.keys()]
 const primary = new Set(['ru', 'de'])
 const shared = new Set([...locales].filter(([lang]) => !primary.has(lang)).flatMap(([, dict]) => Object.keys(dict)))
+// Bengali arrived in upstream 1.4.1 after these fork translations. Keep its English fallback
+// without relaxing coverage in existing packs or inventing translations outside en/ru/de.
+const bengaliForkFallback = new Set([
+  'Saving…', 'Food diary', 'My products', 'Daily totals', 'Consumed food', 'Add food', 'Edit food',
+  'Create product', 'Edit product', 'Product name', 'Brand (optional)', 'Nutritional values per 100 g',
+  'Calories (kcal)', 'Protein (g)', 'Fat (g)', 'Carbohydrates (g)', 'Quantity (g)', 'Consumption date',
+  'Time (optional)', 'Previous day', 'Next day', 'No time', 'Grams', 'Search products', 'Selected product',
+  'Keep original product', 'Keeping the original nutritional snapshot.',
+  'No food recorded for this day. Add your first product.',
+  'No products found. Create your own product to start.', 'Delete this diary entry?',
+  'Delete product? Your diary history will be kept.',
+  'Check the name, date and nutritional values. Use up to 3 decimal places.',
+  'This request was already used. Close the form and check your diary before adding again.',
+  'This item is no longer available. Refresh and try again.', 'Previous products', 'Next products',
+  'Nutrition', 'Sign in to use Nutrition.', 'Nutrition is unavailable. Please try again.', 'Retry'
+])
 
 // t('…{0}…', x) substitutes by index, so a translation that loses a {0} drops the number out of
 // the sentence and one that invents a {1} prints the braces at the reader. The KEY is the English
@@ -49,7 +65,8 @@ const marks = s => [...String(s).matchAll(/\{\d+\}/g)].map(m => m[0]).sort().joi
 let failed = false
 for (const [lang, dict] of locales) {
   const keys = new Set(Object.keys(dict))
-  const missing = union.filter(k => !keys.has(k) && (primary.has(lang) || shared.has(k)))
+  const missing = union.filter(k => !keys.has(k) && (primary.has(lang) || shared.has(k))
+    && !(lang === 'bn' && bengaliForkFallback.has(k)))
   const orphans = union.filter(k => keys.has(k) && seen.get(k) === 1)
   // A blank value is worse than no translation: the English fallback only runs for a key that
   // is ABSENT, so an empty string reaches the screen as an empty screen.
