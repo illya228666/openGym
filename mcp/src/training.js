@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { z } from 'zod'
-import { CATALOGUE, canonicalExId, exOr, registerCustom, searchExercises } from '../../frontend/src/lib/exercises.js'
+import { CATALOGUE, canonicalExId, exOr, isCardio, registerCustom, searchExercises } from '../../frontend/src/lib/exercises.js'
 import { workoutVolume, workoutDuration, modeOf, NOTE_MAX } from '../../frontend/src/lib/history.js'
 import { buildCompletedWorkout } from '../../frontend/src/lib/finish-workout.js'
 import { insertChronological } from '../../frontend/src/lib/backfill.js'
@@ -272,7 +272,7 @@ export const searchExerciseTool = {
     const ownIds = new Set(custom.map(e => e.id))
     const matches = searchExercises([...CATALOGUE.filter(e => !ownIds.has(e.id)), ...custom], query)
     return { total: matches.length, exercises: matches.slice(0, limit).map(e => ({ id: e.id, name: e.n,
-      body_part: e.bp || null, equipment: e.eq || null, mode: modeOf({ id: e.id }), custom: ownIds.has(e.id) })) }
+      body_part: e.bp || null, equipment: e.eq || null, mode: isCardio(e) ? 'cardio' : 'reps', custom: ownIds.has(e.id) })) }
   }
 }
 

@@ -98,6 +98,9 @@ test('search and mutations isolate existing custom exercises by profile', () => 
   alice.customEx = [{ id: 'custom', n: 'Private sled', bp: 'upper legs', eq: 'sled', tg: 'quads' }]
   expect(searchExerciseTool.handler({ query: 'Private sled' }, alice).exercises[0]).toMatchObject({ id: 'custom', name: 'Private sled' })
   expect(searchExerciseTool.handler({ query: 'Private sled' }, bob).exercises).toEqual([])
+  expect(searchExerciseTool.handler({ query: 'Private bike' }, { customEx: [
+    { id: 'private-bike', n: 'Private bike', bp: 'cardio', eq: 'bike' }
+  ] }).exercises[0].mode).toBe('cardio')
   const request = { ...create(), entries: [{ exercise_id: 'custom', sets: [{ w: 40, r: 8 }] }] }
   expect(commit(alice, 'create', request).next.workouts[0].vol).toBe(320)
   expect(() => commit(bob, 'create', request)).toThrow('catalogue')
