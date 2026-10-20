@@ -4,11 +4,12 @@ import { createServer } from './server.js'
 import { createTrainingTools } from './tools.js'
 import { createNutritionTools } from './nutrition.js'
 import { defaultsShape } from './state.js'
+import { createTrainingWriteTools } from './training.js'
 
 const MaxBodyBytes = 64 * 1024
 
 /** Embedded, stateless HTTP entrance. OpenGym verifies every call; SDK owns protocol handling. */
-export function createHttpMcp({ oauth, readState, requestNutrition, json, takeBudget }) {
+export function createHttpMcp({ oauth, readState, writeTraining, requestNutrition, json, takeBudget }) {
   const handler = createMcpHandler(({ authInfo }) => {
     const { token, extra: { principal } } = authInfo
     let snapshot
@@ -20,6 +21,11 @@ export function createHttpMcp({ oauth, readState, requestNutrition, json, takeBu
         }
         return snapshot
       } }),
+      ...createTrainingWriteTools((action, input) => {
+        const result = writeTraining(principal.user.id, action, input)
+        snapshot = undefined
+        return result
+      }),
       ...createNutritionTools(async (method, pathname, query, body) => {
         const current = await oauth.verify(token, method === 'GET' ? 'nutrition.read' : 'nutrition.write')
         return requestNutrition(method, pathname, query, body, oauth.nutritionCredential(current, method, pathname))
@@ -50,4 +56,4 @@ export function createHttpMcp({ oauth, readState, requestNutrition, json, takeBu
     }
   }
 }
-const McpConnectionScopes = 'training.read nutrition.read nutrition.write'
+const McpConnectionScopes = 'training.read training.write nutrition.read nutrition.write'

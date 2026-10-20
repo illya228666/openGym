@@ -57,7 +57,7 @@ test('Custom estimates and user values do not need sources or extra confirmation
   expect(() => z.object(tool.schema).strict().parse({ ...body, data_origin: 'laboratory' })).toThrow()
 })
 
-test('HTTP MCP requests all three scopes before accepting OAuth tokens', async ({ onTestFinished }) => {
+test('HTTP MCP requests all four scopes before accepting OAuth tokens', async ({ onTestFinished }) => {
   let entrance
   const listener = http.createServer((req, res) => entrance.handle(req, res))
   await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve))
@@ -69,7 +69,7 @@ test('HTTP MCP requests all three scopes before accepting OAuth tokens', async (
   const response = await fetch(base + '/mcp', { headers: { Cookie: 'gymsid=ordinary-session' } })
   expect(response.status).toBe(401)
   expect(await response.json()).toEqual({ error: 'invalid_token' })
-  expect(response.headers.get('www-authenticate')).toBe(`Bearer resource_metadata="${base}/.well-known/oauth-protected-resource", scope="training.read nutrition.read nutrition.write"`)
+  expect(response.headers.get('www-authenticate')).toBe(`Bearer resource_metadata="${base}/.well-known/oauth-protected-resource", scope="training.read training.write nutrition.read nutrition.write"`)
 })
 
 test('request-scoped training preserves same-ID custom exercise ownership', async () => {

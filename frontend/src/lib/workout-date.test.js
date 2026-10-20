@@ -17,7 +17,7 @@ describe('startTimeOf', () => {
   })
   it('pads and survives a missing start', () => {
     expect(startTimeOf({ start: backfillStart('2026-03-10', '06:05') })).toBe('06:05')
-    expect(startTimeOf({})).toMatch(/^\d\d:\d\d$/)
+    expect(startTimeOf({})).toBe('')
   })
 })
 
@@ -64,9 +64,9 @@ describe('retimeWorkout', () => {
     const moved = retimeWorkout({ id: 'a', d: '2026-03-10', start: 100, end: 50 }, '2026-02-01', '07:30')
     expect(moved.end).toBe(moved.start)
   })
-  it('a record with no end keeps a zero length rather than NaN', () => {
+  it('a record with no end keeps its duration unknown rather than NaN', () => {
     const moved = retimeWorkout({ id: 'a', d: '2026-03-10', start: 100 }, '2026-02-01', '07:30')
-    expect(moved.end).toBe(moved.start)
+    expect(moved).not.toHaveProperty('end')
   })
   // The sync key of a legacy record is its day and start time, which is what this edit
   // changes. Freezing the old key as the id is what stops the merge duplicating it.
@@ -241,10 +241,23 @@ describe('moveWorkout', () => {
 
 // The workout nobody ended until they got home: its length is corrected, nothing else moves.
 describe('setWorkoutDuration', () => {
+  it('stores duration-only history and fills its clock without inventing unknown values', () => {
+    const unknown = { id: 'date-only', d: '2026-01-01', entries: [] }
+    expect(startTimeOf(unknown)).toBe('')
+    expect(durationMinOf(unknown)).toBe(0)
+    const length = setWorkoutDuration([unknown], unknown, 42, 123)[0]
+    expect(length).toMatchObject({ durationMs: 42 * 60000, _ts: 123 })
+    expect(length).not.toHaveProperty('start')
+    expect(retimeWorkout(length, '2026-01-02', '')).toMatchObject({ d: '2026-01-02', durationMs: 42 * 60000 })
+    const timed = retimeWorkout(length, '2026-01-02', '07:30')
+    expect(timed.end - timed.start).toBe(42 * 60000)
+    const stillUnknown = retimeWorkout(unknown, '2026-01-02', '07:30')
+    expect(stillUnknown).not.toHaveProperty('end')
+  })
   it('reads a saved length in whole minutes, at least one', () => {
     expect(durationMinOf(w('a', '2026-01-01', '18:00', 47))).toBe(47)
     expect(durationMinOf({ start: 1000, end: 1000 })).toBe(1)
-    expect(durationMinOf({ start: 1000 })).toBe(1)
+    expect(durationMinOf({ start: 1000 })).toBe(0)
   })
   it('moves the end, keeps the start, the day, the order and the badges, and stamps the edit', () => {
     const list = [w('a', '2026-01-01', '18:00', 300, [entry('bench', 100)], ['bench']), w('b', '2026-01-05', '18:00', 60)]

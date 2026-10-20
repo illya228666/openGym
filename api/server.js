@@ -1908,6 +1908,58 @@ function dataWritable() {
   return ok;
 }
 
+/** Shared synchronous commit for device sync and scoped MCP workout mutations. */
+function commitProfileState(uid, cur, state, { overRead = true, stamped = false } = {}) {
+  const curRev = cur?._rev || 0;
+  delete state.active;              // in-progress workouts stay device-local
+  // "Reset everything" stamps the profile (`resetAt`, with `resetIds`: what it wiped). The stamp
+  // only moves forward: a write without it, or with an older one — a client from before it, a
+  // backup restored over the profile — keeps the stored stamp. Otherwise every device that saw
+  // the reset would take that copy for one older than the reset, and wipe it again on its next
+  // merge (frontend/src/lib/sync-merge.js).
+  const storedReset = Number(cur?.resetAt) || 0;
+  if (storedReset > (Number(state.resetAt) || 0)) {
+    state.resetAt = cur.resetAt;
+    if (cur.resetIds && typeof cur.resetIds === 'object') state.resetIds = cur.resetIds;
+    else delete state.resetIds;
+  }
+  // The records of removals and edits only grow, and what a writer that does not stamp its own
+  // changes (an older app, an API script) changed is stamped here, so it is neither wiped nor
+  // undone by the next device that merges (sync-stamps.js).
+  // A document nested too deep to compare is the bad request the stringify below refuses too.
+  const report = {};
+  stampPut(cur, state, { overRead: overRead, stamped: stamped, report });
+  state._rev = curRev + 1;          // server-owned; whatever the client sent is ignored
+  // A writer that does not stamp (an older app) takes the revision it is told for the document it
+  // sent, and only reads the profile again once the revision moves. When the server put back
+  // something it left out or set back (sync-stamps.js), the document stored is not that one: it
+  // goes in one revision further, so the writer's next check of the revision (every half minute)
+  // finds it moved and reads it, and its next push over the one it was told is a conflict to merge.
+  if (report.changed) state._rev = curRev + 2;
+  state._wids = [...(Array.isArray(cur?._wids) ? cur._wids : []), ...(cur?._wid ? [cur._wid] : [])]
+    .filter(x => typeof x === 'string').slice(-WID_KEEP);
+  state._wid = crypto.randomBytes(8).toString('hex');
+  // JSON.parse takes any nesting, JSON.stringify recurses and runs out of stack on a document
+  // nested some thousands deep. No client builds one; it is a bad request, not a server error.
+  let text;
+  text = JSON.stringify(state);
+  if (Buffer.byteLength(text) > MAX_BODY) throw new RangeError('State is too large');
+  atomicWrite(stateFile(uid), text);
+  // The stat cache cannot see this write on its own: mtime granularity is 4 ms here (ext4 on
+  // this kernel — 3901 of 3999 back-to-back same-size writes shared one timestamp), and a
+  // `_rev` going from 7 to 8 does not change the file's size, so two writes inside one 4 ms
+  // tick are the same (mtimeMs, size) key. A reader that sampled between them would then serve
+  // the old revision until some later write happened to land on a different tick. This is the
+  // only writer of a state file in the tree, so evicting here is the whole fix.
+  stateCache.delete(uid);
+  // Starts (or stops) the grace clock of every stored file this write stopped (or started)
+  // referencing. Bookkeeping only: the state is already saved, so nothing here may turn a
+  // successful write into an error.
+  if (MEDIA_ON) {
+    try { MEDIA.noteState(uid, state); } catch (e) { console.error('media noteState', e); }
+  }
+  return { rev: curRev + 1, wid: state._wid };
+}
 /* ---------- routes ---------- */
 const nutritionGateway = (req, res) => nutritionProxy(req, res, { readSession, json, readBody });
 const routes = {
@@ -2295,54 +2347,8 @@ const routes = {
         (body.baseRev != null && typeof body.baseWid === 'string' && cur?._wid && body.baseWid !== cur._wid)) {
       return json(res, 409, { error: 'conflict', rev: curRev, state: forClient(cur) });
     }
-    delete body.state.active;              // in-progress workouts stay device-local
-    // "Reset everything" stamps the profile (`resetAt`, with `resetIds`: what it wiped). The stamp
-    // only moves forward: a write without it, or with an older one — a client from before it, a
-    // backup restored over the profile — keeps the stored stamp. Otherwise every device that saw
-    // the reset would take that copy for one older than the reset, and wipe it again on its next
-    // merge (frontend/src/lib/sync-merge.js).
-    const storedReset = Number(cur?.resetAt) || 0;
-    if (storedReset > (Number(body.state.resetAt) || 0)) {
-      body.state.resetAt = cur.resetAt;
-      if (cur.resetIds && typeof cur.resetIds === 'object') body.state.resetIds = cur.resetIds;
-      else delete body.state.resetIds;
-    }
-    // The records of removals and edits only grow, and what a writer that does not stamp its own
-    // changes (an older app, an API script) changed is stamped here, so it is neither wiped nor
-    // undone by the next device that merges (sync-stamps.js).
-    // A document nested too deep to compare is the bad request the stringify below refuses too.
-    const report = {};
-    try { stampPut(cur, body.state, { overRead: body.baseRev != null && body.baseRev === curRev, stamped: body.stamped === true, report }); }
+    try { commitProfileState(user.id, cur, body.state, { overRead: body.baseRev != null && body.baseRev === curRev, stamped: body.stamped === true }); }
     catch (e) { if (e instanceof RangeError) return json(res, 400, { error: 'invalid state' }); throw e; }
-    body.state._rev = curRev + 1;          // server-owned; whatever the client sent is ignored
-    // A writer that does not stamp (an older app) takes the revision it is told for the document it
-    // sent, and only reads the profile again once the revision moves. When the server put back
-    // something it left out or set back (sync-stamps.js), the document stored is not that one: it
-    // goes in one revision further, so the writer's next check of the revision (every half minute)
-    // finds it moved and reads it, and its next push over the one it was told is a conflict to merge.
-    if (report.changed) body.state._rev = curRev + 2;
-    body.state._wids = [...(Array.isArray(cur?._wids) ? cur._wids : []), ...(cur?._wid ? [cur._wid] : [])]
-      .filter(x => typeof x === 'string').slice(-WID_KEEP);
-    body.state._wid = crypto.randomBytes(8).toString('hex');
-    // JSON.parse takes any nesting, JSON.stringify recurses and runs out of stack on a document
-    // nested some thousands deep. No client builds one; it is a bad request, not a server error.
-    let text;
-    try { text = JSON.stringify(body.state); }
-    catch (e) { if (e instanceof RangeError) return json(res, 400, { error: 'invalid state' }); throw e; }
-    atomicWrite(stateFile(user.id), text);
-    // The stat cache cannot see this write on its own: mtime granularity is 4 ms here (ext4 on
-    // this kernel — 3901 of 3999 back-to-back same-size writes shared one timestamp), and a
-    // `_rev` going from 7 to 8 does not change the file's size, so two writes inside one 4 ms
-    // tick are the same (mtimeMs, size) key. A reader that sampled between them would then serve
-    // the old revision until some later write happened to land on a different tick. This is the
-    // only writer of a state file in the tree, so evicting here is the whole fix.
-    stateCache.delete(user.id);
-    // Starts (or stops) the grace clock of every stored file this write stopped (or started)
-    // referencing. Bookkeeping only: the state is already saved, so nothing here may turn a
-    // successful write into an error.
-    if (MEDIA_ON) {
-      try { MEDIA.noteState(user.id, body.state); } catch (e) { console.error('media noteState', e); }
-    }
     json(res, 200, { ok: true, ts: body.state._ts || null, rev: curRev + 1, wid: body.state._wid });
   },
 
@@ -2695,12 +2701,29 @@ async function ensureMcpRuntime() {
 async function startMcpRuntime() {
   const { createMcpOAuth } = await import('./mcp-oauth.js');
   const { createHttpMcp } = await import('../mcp/src/http.js');
+  const { mutateTraining, editableWorkout, workoutKey } = await import('../mcp/src/training.js');
+  const { defaultsShape } = await import('../mcp/src/state.js');
+  const { stampChange } = await import('../frontend/src/lib/sync-merge.js');
   mcpOAuth = createMcpOAuth({ data: DATA, secret: SECRET, origin: ORIGIN, publicUrl: mcpConfiguration.effective.url,
     clients: mcpConfiguration.effective.clients, userById: id => db.users.find(user => user.id === id),
     readSession, json, store: mcpStore || undefined });
   mcpStore = mcpOAuth.store;
   const budget = createWindow({ max: 120, windowMs: 60000 });
   remoteMcp = createHttpMcp({ oauth: mcpOAuth, json, requestNutrition, takeBudget: id => budget.take(id),
+    writeTraining: (id, action, input) => {
+      const current = readStateStrict(id);
+      if (current === UNREADABLE) throw Object.assign(new Error('Training state unreadable'), { code: 'state_unreadable', status: 503 });
+      const state = structuredClone({ ...defaultsShape(), ...current });
+      const result = mutateTraining(state, action, input);
+      if (result.changed) {
+        state._ts = stampChange(current, state);
+        try { commitProfileState(id, current, state, { stamped: true }); }
+        catch (error) { throw Object.assign(error, { code: 'training_save_failed', status: 503, uncertain: true }); }
+      }
+      const workout = state.workouts.find(w => workoutKey(w) === result.workout_id);
+      return result.deleted ? { deleted: true, workout_id: result.workout_id }
+        : editableWorkout(workout, state);
+    },
     readState: id => {
       const state = readStateStrict(id);
       if (state === UNREADABLE) throw Object.assign(new Error('Training state unreadable'), { code: 'state_unreadable', status: 503 });

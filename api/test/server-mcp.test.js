@@ -91,7 +91,7 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
   const unauthenticated = await request('/mcp', { method: 'POST', headers: { Cookie: 'gymsid=' + mint('alice') } });
   assert.equal(unauthenticated.status, 401);
   assert.match(unauthenticated.headers.get('www-authenticate'), /oauth-protected-resource/);
-  assert.match(unauthenticated.headers.get('www-authenticate'), /scope="training.read nutrition.read nutrition.write"/);
+  assert.match(unauthenticated.headers.get('www-authenticate'), /scope="training.read training.write nutrition.read nutrition.write"/);
   const discovery = await request('/.well-known/oauth-authorization-server');
   const metadata = await discovery.json();
   assert.deepEqual(metadata.code_challenge_methods_supported, ['S256']);
@@ -205,13 +205,36 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
     assert.equal(result.result.structuredContent.routines[0].name, name);
   }
   const list = await mcpJson(await rpc(alice.access_token, 'tools/list'));
-  assert.equal(list.result.tools.length, 21);
+  const workoutArgs = { workout_id: crypto.randomUUID(), date: '2026-10-19', unit: 'kg',
+    entries: [{ exercise_id: '0025', sets: [{ w: 60, r: 8 }] }] };
+  const callWorkout = async (tokens, name, args) => (await mcpJson(await rpc(tokens.access_token,
+    'tools/call', { name, arguments: args }))).result;
+  assert.equal((await callWorkout(alice, 'create_workout', workoutArgs)).structuredContent.code, 'insufficient_scope');
+  const writer = await connect('alice', 'training.read training.write');
+  const created = (await callWorkout(writer, 'create_workout', workoutArgs)).structuredContent;
+  assert.equal(created.duration_minutes, null);
+  assert.equal(created.start_time, null);
+  assert.deepEqual((await callWorkout(writer, 'create_workout', workoutArgs)).structuredContent, created);
+  const workoutRead = (await callWorkout(writer, 'get_workout', { workout_id: created.workout_id })).structuredContent;
+  assert.equal(workoutRead.volume, 480);
+  assert.equal((await callWorkout(bob, 'get_workout', { workout_id: created.workout_id })).isError, true);
+  const editWorkout = { workout_id: created.workout_id, expected_version: created.version, unit: 'kg',
+    operation_id: crypto.randomUUID(), duration_minutes: 42, note: 'Saved through MCP' };
+  const edited = (await callWorkout(writer, 'update_workout', editWorkout)).structuredContent;
+  assert.equal(edited.duration_minutes, 42);
+  assert.equal(edited.note, 'Saved through MCP');
+  assert.deepEqual((await callWorkout(writer, 'update_workout', editWorkout)).structuredContent, edited);
+  assert.equal((await callWorkout(writer, 'update_workout', { ...editWorkout, operation_id: crypto.randomUUID() })).structuredContent.code, 'version_conflict');
+  assert.equal((await callWorkout(writer, 'delete_workout', { workout_id: edited.workout_id, unit: 'kg',
+    expected_version: edited.version, operation_id: crypto.randomUUID(), confirmed: true })).structuredContent.deleted, true);
+  assert.equal((await callWorkout(writer, 'create_workout', workoutArgs)).structuredContent.code, 'workout_deleted');
+  assert.equal(list.result.tools.length, 25);
   const discovered = await mcpJson(await rpc(alice.access_token, 'server/discover', {}, '2026-07-28'));
   assert.ok(discovered.result.supportedVersions.includes('2026-07-28'));
   assert.equal(discovered.result._meta['io.modelcontextprotocol/serverInfo'].name, 'opengym');
   const modern = await rpc(alice.access_token, 'tools/list', {}, '2026-07-28');
   assert.equal(modern.status, 200);
-  assert.equal((await mcpJson(modern)).result.tools.length, 21);
+  assert.equal((await mcpJson(modern)).result.tools.length, 25);
   assert.equal(modern.headers.get('mcp-session-id'), null);
   assert.deepEqual(list.result.tools.find(tool => tool.name === 'nutrition_create_entry')._meta.securitySchemes,
     [{ type: 'oauth2', scopes: ['nutrition.write'] }]);
@@ -261,8 +284,10 @@ test('Remote MCP live toggle and DCR preserve PKCE, scopes, ownership and legacy
   assert.equal((await rpc(automatic.access_token, 'tools/list')).status, 200);
   await connect('bob', 'training.read', false, registered.client_id);
   const connections = await (await request('/api/mcp/connections', { headers: { Cookie: 'gymsid=' + mint('alice') } })).json();
-  assert.equal(connections.connections.length, 1);
-  const grantId = connections.connections[0].grantId;
+  assert.equal(connections.connections.length, 2);
+  const readOnlyConnection = connections.connections.find(connection => !connection.scopes.includes('training.write'));
+  assert.ok(readOnlyConnection, 'the existing read-only grant was not upgraded');
+  const grantId = readOnlyConnection.grantId;
   assert.equal((await request('/api/mcp/connections/revoke', { method: 'POST', headers: {
     Cookie: 'gymsid=' + mint('bob'), 'Content-Type': 'application/json'
   }, body: JSON.stringify({ grantId }) })).status, 404);
