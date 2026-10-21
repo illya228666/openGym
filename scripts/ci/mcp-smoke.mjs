@@ -123,13 +123,13 @@ const tool = async (name, args, error) => {
   if (error) assert.equal(envelope.result.structuredContent.code, error)
   return envelope.result.structuredContent
 }
-assert.equal((await rpc('tools/list', {})).result.tools.length, 25)
+assert.equal((await rpc('tools/list', {})).result.tools.length, 31)
 await toggle(false)
 await rpc('tools/list', {}, 404)
 assert.equal((await call('/oauth/token')).status, 404)
 assert.equal((await call('/api/me', { headers: { Cookie: cookie } })).status, 200)
 await toggle(true)
-assert.equal((await rpc('tools/list', {})).result.tools.length, 25)
+assert.equal((await rpc('tools/list', {})).result.tools.length, 31)
 // One completed-workout lifecycle through real OAuth, shared calculations and durable sync.
 const workoutArgs = { workout_id: crypto.randomUUID(), unit: 'kg', date: '2026-10-19',
   entries: [{ exercise_id: '0025', sets: [{ w: 60, r: 8 }, { w: 60, r: 8 }] }] }
