@@ -464,6 +464,112 @@ paths:
         '409': { description: 'Entry creation id already used with a different payload.' }
         '410': { description: 'A retried entry creation refers to a deleted entry.' }
         '503': { description: 'Nutrition or authentication unavailable.' }
+  /api/nutrition/portions:
+    get:
+      tags: [nutrition]
+      operationId: listNutritionPortions
+      summary: List saved standard portions.
+      responses:
+        '200':
+          description: User-owned portions and their ordered ingredients.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NutritionPortionPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [nutrition]
+      operationId: createNutritionPortion
+      summary: Save a standard portion from personal products.
+      description: Reuse id and the identical payload after an uncertain write. Product edits affect future applications only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NutritionPortionCreate' }
+      responses:
+        '201':
+          description: Portion created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NutritionPortion' }
+        '200':
+          description: Identical create retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NutritionPortion' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Product is unavailable or not owned by this user. }
+        '409': { description: Creation id was reused with another payload. }
+  /api/nutrition/portions/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [nutrition]
+      operationId: getNutritionPortion
+      summary: Read a saved standard portion.
+      responses:
+        '200':
+          description: Portion and current product availability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NutritionPortion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Portion not found for this user. }
+    put:
+      tags: [nutrition]
+      operationId: updateNutritionPortion
+      summary: Replace a portion definition for future applications.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NutritionPortionUpdate' }
+      responses:
+        '200':
+          description: Updated portion.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NutritionPortion' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Portion or one of its products is unavailable. }
+    delete:
+      tags: [nutrition]
+      operationId: deleteNutritionPortion
+      summary: Delete a portion definition without changing diary history.
+      responses:
+        '200': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Portion not found for this user. }
+  /api/nutrition/portions/{id}/apply:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [nutrition]
+      operationId: applyNutritionPortion
+      summary: Add all ingredients of a portion as one grouped diary operation.
+      description: One SaveChanges transaction creates independent, editable diary entries with current product nutrition snapshots. Reuse the same id and identical payload after uncertain writes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NutritionPortionApplicationInput' }
+      responses:
+        '201':
+          description: Portion application created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NutritionPortionApplication' }
+        '200':
+          description: Identical application retry; current active component rows returned.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NutritionPortionApplication' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: Portion or an ingredient product is unavailable. No partial diary entries are created. }
+        '409': { description: Application id was reused with another payload. }
   /api/nutrition/entries:
     post:
       tags: [nutrition]
@@ -3543,6 +3649,7 @@ components:
         protein: { type: number, minimum: 0, maximum: 100, multipleOf: 0.001 }
         fat: { type: number, minimum: 0, maximum: 100, multipleOf: 0.001 }
         carbohydrates: { type: number, minimum: 0, maximum: 100, multipleOf: 0.001 }
+        gramsPerPiece: { oneOf: [{ type: number, exclusiveMinimum: 0, maximum: 100000, multipleOf: 0.001 }, { type: 'null' }], description: Optional weight of one item; required for piece-based entries. }
         id: { type: string, format: uuid, description: 'POST only: durable creation key for custom products; reuse identical payload on retry.' }
         dataOrigin: { type: string, enum: [verified_reference, ai_estimate, user_provided], description: 'If omitted: verified_reference with source, otherwise ai_estimate.' }
         source: { oneOf: [{ $ref: '#/components/schemas/NutritionFoodSourceInput' }, { type: 'null' }] }
@@ -3629,14 +3736,26 @@ components:
         hasMore: { type: boolean }
     NutritionEntryUpdate:
       type: object
-      required: [quantityGrams, date]
+      required: [date]
       properties:
-        quantityGrams: { type: number, exclusiveMinimum: 0, maximum: 100000, multipleOf: 0.001 }
         date: { type: string, format: date, description: 'Local date in yyyy-MM-dd format.' }
         time: { oneOf: [{ type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }, { type: 'null' }] }
         productId:
           oneOf: [{ type: string, format: uuid }, { type: 'null' }]
           description: 'Omit or use null to preserve the snapshot; supply an id to take a fresh snapshot.'
+      allOf:
+        - $ref: '#/components/schemas/NutritionEntryAmount'
+    NutritionEntryAmount:
+      oneOf:
+        - type: object
+          required: [quantity, unit]
+          properties:
+            quantity: { type: number, exclusiveMinimum: 0, maximum: 100000, multipleOf: 0.001 }
+            unit: { type: string, enum: [grams, pieces] }
+        - type: object
+          required: [quantityGrams]
+          properties:
+            quantityGrams: { type: number, exclusiveMinimum: 0, maximum: 100000, multipleOf: 0.001, description: Legacy gram-only input. }
     NutritionEntryCreate:
       allOf:
         - { $ref: '#/components/schemas/NutritionEntryUpdate' }
@@ -3647,17 +3766,89 @@ components:
             productId: { type: string, format: uuid }
     NutritionEntry:
       type: object
-      required: [id, productId, name, brand, quantityGrams, date, time, per100Grams, nutrition]
+      required: [id, productId, name, brand, quantityGrams, quantity, unit, gramsPerPiece, date, time, per100Grams, nutrition, portionGroupId, portionName]
       properties:
         id: { type: string, format: uuid }
         productId: { type: string, format: uuid }
         name: { type: string }
         brand: { oneOf: [{ type: string }, { type: 'null' }] }
         quantityGrams: { type: number }
+        quantity: { type: number, description: Stored amount in the unit; up to 3 decimal places. }
+        unit: { type: string, enum: [grams, pieces] }
+        gramsPerPiece: { type: [number, 'null'], description: Entry snapshot of one-piece weight; never follows later product edits. }
         date: { type: string, format: date }
         time: { oneOf: [{ type: string }, { type: 'null' }] }
         per100Grams: { $ref: '#/components/schemas/NutritionValues' }
         provenance: { oneOf: [{ $ref: '#/components/schemas/NutritionProvenance' }, { type: 'null' }] }
+        nutrition: { $ref: '#/components/schemas/NutritionValues' }
+        portionGroupId: { type: [string, 'null'], format: uuid, description: Shared id for entries created from one standard portion. }
+        portionName: { type: [string, 'null'], description: Name snapshot from the portion at application time. }
+    NutritionPortionIngredientInput:
+      type: object
+      additionalProperties: false
+      required: [productId, quantity, unit]
+      properties:
+        productId: { type: string, format: uuid }
+        quantity: { type: number, exclusiveMinimum: 0, maximum: 100000, multipleOf: 0.001 }
+        unit: { type: string, enum: [grams, pieces] }
+      description: Piece quantities require a known gramsPerPiece on the selected product.
+    NutritionPortionCreate:
+      type: object
+      additionalProperties: false
+      required: [id, name, ingredients]
+      properties:
+        id: { type: string, format: uuid, description: Stable client creation ID for identical retries. }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        ingredients: { type: array, minItems: 1, maxItems: 100, items: { $ref: '#/components/schemas/NutritionPortionIngredientInput' } }
+    NutritionPortionUpdate:
+      type: object
+      additionalProperties: false
+      required: [name, ingredients]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        ingredients: { type: array, minItems: 1, maxItems: 100, items: { $ref: '#/components/schemas/NutritionPortionIngredientInput' } }
+    NutritionPortionIngredient:
+      type: object
+      required: [productId, productName, productBrand, quantity, unit, gramsPerPiece, productAvailable]
+      properties:
+        productId: { type: string, format: uuid }
+        productName: { type: string, description: Current name when the product is available, otherwise the saved template name. }
+        productBrand: { type: [string, 'null'] }
+        quantity: { type: number }
+        unit: { type: string, enum: [grams, pieces] }
+        gramsPerPiece: { type: [number, 'null'] }
+        productAvailable: { type: boolean }
+    NutritionPortion:
+      type: object
+      required: [id, name, ingredients]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        ingredients: { type: array, items: { $ref: '#/components/schemas/NutritionPortionIngredient' } }
+    NutritionPortionPage:
+      type: object
+      required: [portions]
+      properties:
+        portions: { type: array, items: { $ref: '#/components/schemas/NutritionPortion' } }
+    NutritionPortionApplicationInput:
+      type: object
+      additionalProperties: false
+      required: [id, multiplier, date]
+      properties:
+        id: { type: string, format: uuid, description: Stable application ID for identical retries. }
+        multiplier: { type: number, exclusiveMinimum: 0, maximum: 100000, multipleOf: 0.001, default: 1 }
+        date: { type: string, format: date, description: Local calendar date in yyyy-MM-dd format. }
+        time: { oneOf: [{ type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }, { type: 'null' }] }
+    NutritionPortionApplication:
+      type: object
+      required: [id, name, multiplier, date, time, entries, nutrition]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        multiplier: { type: number }
+        date: { type: string, format: date }
+        time: { oneOf: [{ type: string }, { type: 'null' }] }
+        entries: { type: array, items: { $ref: '#/components/schemas/NutritionEntry' } }
         nutrition: { $ref: '#/components/schemas/NutritionValues' }
     NutritionDiary:
       type: object

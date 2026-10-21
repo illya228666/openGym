@@ -3,10 +3,14 @@ using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.DependencyInjection;
 using OpenGym.Nutrition.Api;
 using OpenGym.Nutrition.Authentication;
 using OpenGym.Nutrition.Services;
+using OpenGym.Nutrition.Persistence;
 using Xunit;
 
 namespace OpenGym.Nutrition.Tests;
@@ -144,6 +148,139 @@ public sealed class DiaryApiTests
     }
 
     [Fact]
+    public async Task PieceEntriesConvertUnitsKeepProductWeightSnapshotAndAcceptLegacyGrams()
+    {
+        using var factory = new DiaryFactory();
+        using var client = factory.Client("alice");
+        var product = await CreateProduct(client, Food("Egg", 155) with { GramsPerPiece = 40 });
+        var id = Guid.NewGuid();
+        var request = new CreateEntryRequest(id, product.Id, null, "2026-10-13", null, 2.5m, "pieces");
+        var created = await client.PostAsJsonAsync("/api/nutrition/entries", request);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var entry = (await created.Content.ReadFromJsonAsync<EntryResponse>())!;
+        Assert.Equal(2.5m, entry.Quantity);
+        Assert.Equal("pieces", entry.Unit);
+        Assert.Equal(40m, entry.GramsPerPiece);
+        Assert.Equal(100m, entry.QuantityGrams);
+        Assert.Equal(155m, entry.Nutrition.Calories);
+        var retry = await client.PostAsJsonAsync("/api/nutrition/entries", request);
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        Assert.Equal(entry, await retry.Content.ReadFromJsonAsync<EntryResponse>());
+        await client.PutAsJsonAsync("/api/nutrition/products/" + product.Id, Food("Egg", 155) with { GramsPerPiece = 20 });
+        Assert.Equal(entry, await client.GetFromJsonAsync<EntryResponse>("/api/nutrition/entries/" + id));
+
+        var switched = await client.PutAsJsonAsync("/api/nutrition/entries/" + id,
+            new UpdateEntryRequest(null, "2026-10-13", null, null, 100m, "grams"));
+        var grams = (await switched.Content.ReadFromJsonAsync<EntryResponse>())!;
+        Assert.Equal((100m, "grams", 100m), (grams.Quantity, grams.Unit, grams.QuantityGrams));
+        var switchedBack = await client.PutAsJsonAsync("/api/nutrition/entries/" + id,
+            new UpdateEntryRequest(null, "2026-10-13", null, null, 2.5m, "pieces"));
+        Assert.Equal(100m, (await switchedBack.Content.ReadFromJsonAsync<EntryResponse>())!.QuantityGrams);
+
+        var legacyId = Guid.NewGuid();
+        var legacy = await client.PostAsJsonAsync("/api/nutrition/entries",
+            new CreateEntryRequest(legacyId, product.Id, 50, "2026-10-13", null));
+        var oldFormat = (await legacy.Content.ReadFromJsonAsync<EntryResponse>())!;
+        Assert.Equal((50m, "grams", 50m), (oldFormat.Quantity, oldFormat.Unit, oldFormat.QuantityGrams));
+    }
+
+    [Fact]
+    public async Task PieceEntriesRequireKnownWeightAndAmountFormatsCannotConflict()
+    {
+        using var factory = new DiaryFactory();
+        using var client = factory.Client("alice");
+        var product = await CreateProduct(client);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync("/api/nutrition/products/" + product.Id,
+            Food("No weight", 123) with { GramsPerPiece = 0.0001m })).StatusCode);
+        var id = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/nutrition/entries",
+            new CreateEntryRequest(id, product.Id, null, "2026-10-13", null, 1.5m, "pieces"))).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/nutrition/entries",
+            new { id, productId = product.Id, quantity = 1, date = "2026-10-13" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/nutrition/entries",
+            new { id, productId = product.Id, quantity = 1, unit = "servings", date = "2026-10-13" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/nutrition/entries",
+            new { id, productId = product.Id, quantity = 1.0001m, unit = "grams", date = "2026-10-13" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/nutrition/entries",
+            new { id, productId = product.Id, quantityGrams = 100, quantity = 1, unit = "grams", date = "2026-10-13" })).StatusCode);
+        Assert.Empty((await Day(client)).Entries);
+    }
+
+    [Fact]
+    public async Task PortionsSnapshotProductsApplyAsGroupedRowsAndDetachWhenMoved()
+    {
+        using var factory = new DiaryFactory();
+        using var client = factory.Client("alice");
+        using var other = factory.Client("bob");
+        var eggs = await CreateProduct(client, Food("Egg", 155) with { GramsPerPiece = 40 });
+        var oats = await CreateProduct(client, Food("Oats", 380));
+        var portionId = Guid.NewGuid();
+        var template = new CreatePortionRequest(portionId, "Breakfast", [
+            new PortionIngredientRequest(eggs.Id, 2, "pieces"),
+            new PortionIngredientRequest(oats.Id, 30, "grams")]);
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync("/api/nutrition/portions", template)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/api/nutrition/portions", template)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync("/api/nutrition/portions", template with { Name = "Other breakfast" })).StatusCode);
+        var portion = await client.GetFromJsonAsync<PortionResponse>("/api/nutrition/portions/" + portionId);
+        Assert.Equal(new[] { "pieces", "grams" }, portion!.Ingredients.Select(i => i.Unit));
+        Assert.Equal(HttpStatusCode.NotFound, (await other.GetAsync("/api/nutrition/portions/" + portionId)).StatusCode);
+
+        var applicationId = Guid.NewGuid();
+        var applicationRequest = new PortionApplicationRequest(applicationId, 1.5m, "2026-10-13", "08:00");
+        var appliedResponse = await client.PostAsJsonAsync($"/api/nutrition/portions/{portionId}/apply", applicationRequest);
+        Assert.Equal(HttpStatusCode.Created, appliedResponse.StatusCode);
+        var applied = (await appliedResponse.Content.ReadFromJsonAsync<PortionApplicationResponse>())!;
+        Assert.Equal(2, applied.Entries.Count);
+        Assert.Equal(new[] { 3m, 45m }, applied.Entries.Select(e => e.Quantity));
+        Assert.Equal(new[] { "pieces", "grams" }, applied.Entries.Select(e => e.Unit));
+        Assert.All(applied.Entries, entry => Assert.Equal((applicationId, "Breakfast"), (entry.PortionGroupId, entry.PortionName)));
+        Assert.Equal(120m, applied.Entries[0].QuantityGrams);
+        Assert.Equal(186m, applied.Entries[0].Nutrition.Calories);
+
+        await client.PutAsJsonAsync("/api/nutrition/products/" + eggs.Id, Food("Egg changed", 300) with { GramsPerPiece = 20 });
+        await client.PutAsJsonAsync("/api/nutrition/portions/" + portionId,
+            new UpdatePortionRequest("Updated breakfast", [new PortionIngredientRequest(oats.Id, 50, "grams")]));
+        Assert.Equal(applied.Entries[0], await client.GetFromJsonAsync<EntryResponse>("/api/nutrition/entries/" + applied.Entries[0].Id));
+        var retry = await client.PostAsJsonAsync($"/api/nutrition/portions/{portionId}/apply", applicationRequest);
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        var retried = (await retry.Content.ReadFromJsonAsync<PortionApplicationResponse>())!;
+        Assert.Equal(applied.Id, retried.Id);
+        Assert.Equal(applied.Name, retried.Name);
+        Assert.Equal(applied.Multiplier, retried.Multiplier);
+        Assert.Equal(applied.Entries.Select(e => e.Id), retried.Entries.Select(e => e.Id));
+        Assert.Equal(applied.Entries.Select(e => e.Nutrition), retried.Entries.Select(e => e.Nutrition));
+        Assert.Equal(2, (await Day(client)).Entries.Count);
+
+        var moved = await client.PutAsJsonAsync("/api/nutrition/entries/" + applied.Entries[0].Id,
+            new UpdateEntryRequest(null, "2026-10-14", null, null, applied.Entries[0].Quantity, applied.Entries[0].Unit));
+        var detached = (await moved.Content.ReadFromJsonAsync<EntryResponse>())!;
+        Assert.Null(detached.PortionGroupId);
+        Assert.Null(detached.PortionName);
+        Assert.Single((await Day(client)).Entries);
+        Assert.Equal(HttpStatusCode.OK, (await client.DeleteAsync("/api/nutrition/portions/" + portionId)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/nutrition/portions/" + portionId)).StatusCode);
+        Assert.Single((await Day(client, "2026-10-14")).Entries);
+    }
+
+    [Fact]
+    public async Task PortionsRejectMissingPieceWeightAndUnavailableProductsWithoutPartialWrites()
+    {
+        using var factory = new DiaryFactory();
+        using var client = factory.Client("alice");
+        var noWeight = await CreateProduct(client);
+        var portionId = Guid.NewGuid();
+        var invalid = new CreatePortionRequest(portionId, "Invalid", [new PortionIngredientRequest(noWeight.Id, 1, "pieces")]);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/nutrition/portions", invalid)).StatusCode);
+        var weighted = await CreateProduct(client, Food("Egg", 155) with { GramsPerPiece = 40 });
+        var valid = new CreatePortionRequest(portionId, "Snack", [new PortionIngredientRequest(weighted.Id, 1, "pieces")]);
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync("/api/nutrition/portions", valid)).StatusCode);
+        await client.DeleteAsync("/api/nutrition/products/" + weighted.Id);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsJsonAsync($"/api/nutrition/portions/{portionId}/apply",
+            new PortionApplicationRequest(Guid.NewGuid(), 1, "2026-10-13", null))).StatusCode);
+        Assert.Empty((await Day(client)).Entries);
+    }
+
+    [Fact]
     public async Task ConcurrentCreationCreatesOnlyOneEntry()
     {
         using var factory = new DiaryFactory();
@@ -219,7 +356,34 @@ public sealed class DiaryApiTests
             await connection.OpenAsync();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM __EFMigrationsHistory";
-            Assert.Equal(3L, await command.ExecuteScalarAsync());
+            Assert.Equal(5L, await command.ExecuteScalarAsync());
+        }
+        finally { SqliteConnection.ClearAllPools(); if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task PieceMigrationKeepsLegacyAmountAndNutritionSnapshot()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "nutrition-piece-migration-" + Guid.NewGuid());
+        var path = Path.Combine(directory, "test.db");
+        var productId = Guid.NewGuid();
+        var entryId = Guid.NewGuid();
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var options = new DbContextOptionsBuilder<NutritionDbContext>().UseSqlite("Data Source=" + path).Options;
+            await using (var old = new NutritionDbContext(options))
+            {
+                await old.GetService<IMigrator>().MigrateAsync("20261013095904_InitialFoodDiary");
+                await old.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO Products (Id, UserId, Name, Brand, SearchText, Calories, Protein, Fat, Carbohydrates, IsDeleted) VALUES ({productId}, 'alice', 'Old apple', NULL, 'old apple', '52', '0.3', '0.2', '14', 0)");
+                await old.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO DiaryEntries (Id, UserId, ProductId, Date, Time, QuantityGrams, Name, Brand, Calories, Protein, Fat, Carbohydrates, CreatedAtUtc, CreationFingerprint, IsDeleted) VALUES ({entryId}, 'alice', {productId}, '2026-10-13', NULL, '125.5', 'Historical apple', NULL, '123.456', '2.5', '3.25', '7.75', '2026-10-13 12:00:00', 'old-fingerprint', 0)");
+            }
+            using var factory = new DiaryFactory(path);
+            using var client = factory.Client("alice");
+            var entry = (await client.GetFromJsonAsync<EntryResponse>("/api/nutrition/entries/" + entryId))!;
+            Assert.Equal((125.5m, 125.5m, "grams", (decimal?)null),
+                (entry.Quantity, entry.QuantityGrams, entry.Unit, entry.GramsPerPiece));
+            Assert.Equal(new Nutrients(154.93728m, 3.1375m, 4.07875m, 9.72625m), entry.Nutrition);
         }
         finally { SqliteConnection.ClearAllPools(); if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }

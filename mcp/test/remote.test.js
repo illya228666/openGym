@@ -16,6 +16,7 @@ test('Custom food tools preserve provenance, stable creation IDs and returned de
   }
   const body = { product_id: 'a164d2ef-8b28-4db5-93ac-f06b721ef935', name: 'Cooked chicken breast',
     calories: 165, protein: 31.02, fat: 3.57, carbohydrates: 0,
+    grams_per_piece: 125,
     source: { provider: 'usda', food_id: '171077', url: 'https://fdc.nal.usda.gov/food-details/171077/nutrients' },
     food_state: 'cooked', cooking_method: 'roasted' }
   await call('nutrition_search_reference_foods', { search: 'chicken breast cooked roasted' })
@@ -24,6 +25,7 @@ test('Custom food tools preserve provenance, stable creation IDs and returned de
   await call('nutrition_create_custom_product', body)
   expect(calls[1]).toEqual(['POST', '/api/nutrition/products', {}, { id: body.product_id,
     name: body.name, brand: null, calories: 165, protein: 31.02, fat: 3.57, carbohydrates: 0,
+    gramsPerPiece: 125,
     source: { provider: 'usda', foodId: '171077', url: body.source.url }, foodState: 'cooked',
     cookingMethod: 'roasted', confirmedPreparationAnalog: false }])
   expect(calls[2]).toEqual(calls[1])
@@ -162,21 +164,75 @@ test('Nutrition tools preserve API payloads, retry IDs and historical snapshots'
   expect(calls[2][3].productId).toBeNull()
   await call('nutrition_update_entry', payload)
   expect(calls[3][3].productId).toBe(product)
+  await call('nutrition_create_entry', { entry_id: id, product_id: product, quantity: 2.5, unit: 'pieces', date: '2026-10-13' })
+  expect(calls[4][3]).toEqual({ id, productId: product, quantity: 2.5, unit: 'pieces', date: '2026-10-13', time: null })
+  await call('nutrition_update_entry', { entry_id: id, quantity: 100, unit: 'grams', date: '2026-10-13' })
+  expect(calls[5][3]).toMatchObject({ productId: null, quantity: 100, unit: 'grams' })
+  for (const invalid of [
+    { entry_id: id, product_id: product, quantity: 1, date: '2026-10-13' },
+    { entry_id: id, product_id: product, unit: 'pieces', date: '2026-10-13' },
+    { entry_id: id, product_id: product, quantity_grams: 100, quantity: 1, unit: 'pieces', date: '2026-10-13' }
+  ]) expect(() => call('nutrition_create_entry', invalid)).toThrow()
+  expect(calls).toHaveLength(6)
   await call('nutrition_search_products', { search: 'rice', offset: 50 })
-  expect(calls[4]).toEqual(['GET', '/api/nutrition/products', { search: 'rice', offset: 50 }])
+  expect(calls[6]).toEqual(['GET', '/api/nutrition/products', { search: 'rice', offset: 50 }])
   await call('nutrition_get_product', { product_id: product })
-  expect(calls[5]).toEqual(['GET', '/api/nutrition/products/' + product])
+  expect(calls[7]).toEqual(['GET', '/api/nutrition/products/' + product])
   await call('nutrition_get_diary', { date: '2026-10-13' })
-  expect(calls[6]).toEqual(['GET', '/api/nutrition/diary', { date: '2026-10-13' }])
+  expect(calls[8]).toEqual(['GET', '/api/nutrition/diary', { date: '2026-10-13' }])
   await call('nutrition_get_entry', { entry_id: id })
-  expect(calls[7]).toEqual(['GET', '/api/nutrition/entries/' + id])
+  expect(calls[9]).toEqual(['GET', '/api/nutrition/entries/' + id])
   expect(() => call('nutrition_delete_entry', { entry_id: id })).toThrow()
   await call('nutrition_delete_entry', { entry_id: id, confirmed: true })
-  expect(calls[8]).toEqual(['DELETE', '/api/nutrition/entries/' + id])
+  expect(calls[10]).toEqual(['DELETE', '/api/nutrition/entries/' + id])
   expect(() => call('nutrition_create_entry', { ...payload, date: '2026-02-30' })).toThrow()
   expect(() => call('nutrition_create_entry', { ...payload, quantity_grams: 0 })).toThrow()
   expect(() => call('nutrition_create_entry', { ...payload, quantity_grams: 2.1234 })).toThrow()
   expect(() => call('nutrition_get_entry', { entry_id: id, user_id: 'bob' })).toThrow()
+})
+
+test('Nutrition portion tools preserve ordered gram/piece ingredients and idempotent application IDs', async () => {
+  const calls = []
+  const tools = createNutritionTools(async (...args) => { calls.push(args); return { id: 'saved' } })
+  const call = (name, args) => {
+    const tool = tools.find(t => t.name === name)
+    return tool.handler(z.object(tool.schema).strict().parse(args))
+  }
+  const portion = 'a164d2ef-8b28-4db5-93ac-f06b721ef935'
+  const egg = '397b3f7a-1d7e-441d-8d5c-dcce22c1ba84'
+  const bread = 'c497cbdd-276e-4b95-a6cd-293a6dd843cf'
+  await call('nutrition_list_portions', {})
+  await call('nutrition_get_portion', { portion_id: portion })
+  const create = { portion_id: portion, name: 'Breakfast', ingredients: [
+    { product_id: egg, quantity: 1.5, unit: 'pieces' }, { product_id: bread, quantity: 45, unit: 'grams' }
+  ] }
+  await call('nutrition_create_portion', create)
+  expect(calls[0]).toEqual(['GET', '/api/nutrition/portions'])
+  expect(calls[1]).toEqual(['GET', '/api/nutrition/portions/' + portion])
+  expect(calls[2]).toEqual(['POST', '/api/nutrition/portions', {}, { id: portion, name: 'Breakfast', ingredients: [
+    { productId: egg, quantity: 1.5, unit: 'pieces' }, { productId: bread, quantity: 45, unit: 'grams' }
+  ] }])
+  const update = { ...create, name: 'Large breakfast' }
+  await call('nutrition_update_portion', update)
+  expect(calls[3]).toEqual(['PUT', '/api/nutrition/portions/' + portion, {}, {
+    name: 'Large breakfast', ingredients: create.ingredients.map(i => ({ productId: i.product_id, quantity: i.quantity, unit: i.unit }))
+  }])
+  const application = 'd497cbdd-276e-4b95-a6cd-293a6dd843cf'
+  const apply = { application_id: application, portion_id: portion, multiplier: 0.5, date: '2026-10-13', time: '08:30' }
+  await call('nutrition_add_portion', apply)
+  await call('nutrition_add_portion', apply)
+  expect(calls[4]).toEqual(['POST', `/api/nutrition/portions/${portion}/apply`, {}, {
+    id: application, multiplier: 0.5, date: '2026-10-13', time: '08:30'
+  }])
+  expect(calls[5]).toEqual(calls[4])
+  expect(tools.find(t => t.name === 'nutrition_list_portions').scope).toBe('nutrition.read')
+  expect(tools.find(t => t.name === 'nutrition_add_portion')).toMatchObject({ scope: 'nutrition.write', idempotent: true })
+  expect(() => call('nutrition_create_portion', { ...create, ingredients: [] })).toThrow()
+  expect(() => call('nutrition_create_portion', { ...create, ingredients: [{ ...create.ingredients[0], unit: 'servings' }] })).toThrow()
+  expect(() => call('nutrition_add_portion', { ...apply, multiplier: 0 })).toThrow()
+  expect(() => call('nutrition_delete_portion', { portion_id: portion })).toThrow()
+  await call('nutrition_delete_portion', { portion_id: portion, confirmed: true })
+  expect(calls[6]).toEqual(['DELETE', '/api/nutrition/portions/' + portion])
 })
 
 test('External catalog tools require exact source identity and never accept model-supplied nutrients', async () => {

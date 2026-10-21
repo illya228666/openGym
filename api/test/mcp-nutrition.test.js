@@ -78,3 +78,25 @@ test('MCP custom product and reference search stay on allowlisted Nutrition oper
     await assert.rejects(requestNutrition('GET', path), /Unsupported Nutrition operation/);
   assert.equal(calls.length, 2);
 });
+
+test('portion routes are explicit in the Nutrition gateway allowlist', async t => {
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, options });
+    return new Response('{"portions":[]}');
+  });
+  const id = 'b8d5423d-a4f6-4759-a3cb-71bd068da786';
+  await requestNutrition('GET', '/api/nutrition/portions', {}, undefined, 'ogn.read');
+  await requestNutrition('GET', '/api/nutrition/portions/' + id, {}, undefined, 'ogn.read');
+  const body = { id, name: 'Breakfast', ingredients: [] };
+  await requestNutrition('POST', '/api/nutrition/portions', {}, body, 'ogn.write');
+  await requestNutrition('PUT', '/api/nutrition/portions/' + id, {}, body, 'ogn.write');
+  await requestNutrition('POST', '/api/nutrition/portions/' + id + '/apply', {}, { id }, 'ogn.write');
+  await requestNutrition('DELETE', '/api/nutrition/portions/' + id, {}, undefined, 'ogn.write');
+  assert.deepEqual(calls.map(call => call.url.pathname), [
+    '/api/nutrition/portions', '/api/nutrition/portions/' + id, '/api/nutrition/portions',
+    '/api/nutrition/portions/' + id, '/api/nutrition/portions/' + id + '/apply', '/api/nutrition/portions/' + id
+  ]);
+  assert.equal(nutritionRoute('GET', '/api/nutrition/portions/../../me'), null);
+  await assert.rejects(requestNutrition('POST', '/api/nutrition/portions/not-a-guid/apply'), /Unsupported/);
+});

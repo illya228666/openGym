@@ -7,6 +7,12 @@ const date = () => z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
 }, 'Invalid calendar date')
 const quantity = () => z.number().positive().max(100000).refine(value =>
   Math.abs(value * 1000 - Math.round(value * 1000)) < 0.000001, 'At most three decimal places')
+const entryAmount = p => {
+  const hasLegacy = p.quantity_grams != null
+  const hasNew = p.quantity != null || p.unit != null
+  if (hasLegacy === hasNew || (hasNew && (p.quantity == null || p.unit == null))) throw new Error('Supply quantity_grams or quantity and unit')
+  return hasLegacy ? { quantityGrams: p.quantity_grams } : { quantity: p.quantity, unit: p.unit }
+}
 const time = () => z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional()
 
 const nutrient = max => z.number().min(0).max(max).refine(value =>
@@ -35,8 +41,9 @@ export function createNutritionTools(request) {
       { write: true, idempotent: true, openWorld: true }),
     tool('nutrition_search_reference_foods', 'Optionally search USDA FoodData Central using English food/preparation terms. Returns non-branded candidates and per100Grams when complete. These are reference averages, not laboratory measurements of the meal. USDA failure does not prevent creating a clearly labeled ai_estimate or user_provided custom product. Do not substitute an industrial product for homemade food.',
       { search: z.string().trim().min(1).max(200) }, p => request('GET', '/api/nutrition/reference-foods', p), { openWorld: true }),
-    tool('nutrition_create_custom_product', 'Create or reuse personal food with all four per-100g values. data_origin: ai_estimate for reasonable AI estimates, user_provided for user values, verified_reference for independently checked USDA values. Estimates/user values need no external source or additional confirmation. When the user delegates estimation (including an ordinary request to log homemade food), choose reasonable values for the stated preparation, save ai_estimate and disclose that the values are approximate. Do not zero-fill unknowns; an estimated zero is allowed when appropriate. source is optional except for verified_reference, which retains USDA verification and preparation-analog confirmation. Omitting data_origin infers verified_reference when source is supplied, otherwise ai_estimate. food_state is raw/ready/cooked; cooked requires cooking_method. Retain product_id and identical payload on retries; use the returned id and values when a product is reused. Then call nutrition_create_entry with eaten grams/date and confirm only after it succeeds.',
+    tool('nutrition_create_custom_product', 'Create or reuse personal food with all four per-100g values and optional grams_per_piece. data_origin: ai_estimate for reasonable AI estimates, user_provided for user values, verified_reference for independently checked USDA values. Estimates/user values need no external source or additional confirmation. When the user delegates estimation (including an ordinary request to log homemade food), choose reasonable values for the stated preparation, save ai_estimate and disclose that the values are approximate. Do not zero-fill unknowns; an estimated zero is allowed when appropriate. source is optional except for verified_reference, which retains USDA verification and preparation-analog confirmation. Omitting data_origin infers verified_reference when source is supplied, otherwise ai_estimate. food_state is raw/ready/cooked; cooked requires cooking_method. Retain product_id and identical payload on retries; use the returned id and values when a product is reused. Then call nutrition_create_entry with the eaten quantity/unit and confirm only after it succeeds.',
       { product_id: uuid(), name: z.string().trim().min(1).max(200), brand: z.string().trim().max(100).nullable().optional(),
+        grams_per_piece: quantity().optional(),
         calories: nutrient(1000), protein: nutrient(100), fat: nutrient(100), carbohydrates: nutrient(100),
         data_origin: z.enum(['verified_reference', 'ai_estimate', 'user_provided']).optional(),
         source: z.object({ provider: z.literal('usda'), food_id: z.string().regex(/^[1-9][0-9]{0,8}$/), url: z.string().max(300) }).strict().nullable().optional(),
@@ -45,6 +52,7 @@ export function createNutritionTools(request) {
         confirmed_preparation_analog: z.boolean().default(false) },
       p => request('POST', '/api/nutrition/products', {}, { id: p.product_id, name: p.name, brand: p.brand ?? null,
         calories: p.calories, protein: p.protein, fat: p.fat, carbohydrates: p.carbohydrates,
+        ...(p.grams_per_piece != null ? { gramsPerPiece: p.grams_per_piece } : {}),
         source: p.source ? { provider: p.source.provider, foodId: p.source.food_id, url: p.source.url } : null,
         ...(p.data_origin ? { dataOrigin: p.data_origin } : {}),
         foodState: p.food_state, cookingMethod: p.cooking_method ?? null,
@@ -55,16 +63,44 @@ export function createNutritionTools(request) {
       { date: date() }, p => request('GET', '/api/nutrition/diary', p)),
     tool('nutrition_get_entry', 'Read one diary entry before changing or deleting it.',
       { entry_id: uuid() }, p => request('GET', `/api/nutrition/entries/${p.entry_id}`)),
-    tool('nutrition_create_entry', 'Record one unambiguously identified saved product and user-supplied grams, including a product just imported with nutrition_create_product; no additional confirmation is needed. Supply a new UUID entry_id once and reuse it with the identical payload on every retry. Do not guess product, raw/cooked state, grams from pieces or a local date.',
-      { entry_id: uuid(), product_id: uuid(), quantity_grams: quantity(), date: date(), time: time() },
+    tool('nutrition_create_entry', 'Record one unambiguously identified saved product and quantity. Use quantity_grams for legacy gram input, or provide both quantity and unit (grams or pieces). Piece entries require the product to have a known grams_per_piece; never guess it. Reuse the same entry_id and identical payload on retries.',
+      { entry_id: uuid(), product_id: uuid(), quantity_grams: quantity().optional(), quantity: quantity().optional(),
+        unit: z.enum(['grams', 'pieces']).optional(), date: date(), time: time() },
       p => request('POST', '/api/nutrition/entries', {}, { id: p.entry_id, productId: p.product_id,
-        quantityGrams: p.quantity_grams, date: p.date, time: p.time ?? null }), { write: true, idempotent: true }),
-    tool('nutrition_update_entry', 'Update a previously read entry. Send its complete quantity/date/time. Omit product_id to retain historical nutrition, even if its product was deleted; specify it only for an intentional product replacement. Concurrent edits are last-write-wins.',
-      { entry_id: uuid(), product_id: uuid().optional(), quantity_grams: quantity(), date: date(), time: time() },
+        ...entryAmount(p), date: p.date, time: p.time ?? null }), { write: true, idempotent: true }),
+    tool('nutrition_update_entry', 'Update a previously read entry with its complete quantity/date/time. Use quantity_grams for legacy gram input, or provide both quantity and unit. Piece entries require a known grams_per_piece. Omit product_id to retain historical nutrition; specify it only for intentional replacement.',
+      { entry_id: uuid(), product_id: uuid().optional(), quantity_grams: quantity().optional(), quantity: quantity().optional(),
+        unit: z.enum(['grams', 'pieces']).optional(), date: date(), time: time() },
       p => request('PUT', `/api/nutrition/entries/${p.entry_id}`, {}, { productId: p.product_id ?? null,
-        quantityGrams: p.quantity_grams, date: p.date, time: p.time ?? null }), { write: true, destructive: true }),
+        ...entryAmount(p), date: p.date, time: p.time ?? null }), { write: true, destructive: true }),
     tool('nutrition_delete_entry', 'Delete the specific entry the user has confirmed. Read it first and ask for confirmation; do not set confirmed for an ambiguous deletion.',
       { entry_id: uuid(), confirmed: z.literal(true) }, p => request('DELETE', `/api/nutrition/entries/${p.entry_id}`),
-      { write: true, destructive: true, idempotent: true })
+      { write: true, destructive: true, idempotent: true }),
+    tool('nutrition_list_portions', 'List your saved standard portions with their ordered products and per-item quantities. Entries in grams or pieces are kept as defined; no nutrition values are guessed.',
+      {}, () => request('GET', '/api/nutrition/portions')),
+    tool('nutrition_get_portion', 'Read a saved portion before editing, applying, or deleting it.',
+      { portion_id: uuid() }, p => request('GET', `/api/nutrition/portions/${p.portion_id}`)),
+    tool('nutrition_create_portion', 'Create a standard portion from 1–100 products in your personal catalog. Each item has its own quantity and grams/pieces unit. Reuse the same portion_id and identical payload on retries.',
+      { portion_id: uuid(), name: z.string().trim().min(1).max(200), ingredients: z.array(z.object({
+        product_id: uuid(), quantity: quantity(), unit: z.enum(['grams', 'pieces'])
+      }).strict()).min(1).max(100) },
+      p => request('POST', '/api/nutrition/portions', {}, { id: p.portion_id, name: p.name,
+        ingredients: p.ingredients.map(i => ({ productId: i.product_id, quantity: i.quantity, unit: i.unit })) }),
+      { write: true, idempotent: true }),
+    tool('nutrition_update_portion', 'Replace the name and complete ordered ingredient list of a saved portion. Piece ingredients require products with a known grams_per_piece. This changes future applications only.',
+      { portion_id: uuid(), name: z.string().trim().min(1).max(200), ingredients: z.array(z.object({
+        product_id: uuid(), quantity: quantity(), unit: z.enum(['grams', 'pieces'])
+      }).strict()).min(1).max(100) },
+      p => request('PUT', `/api/nutrition/portions/${p.portion_id}`, {}, { name: p.name,
+        ingredients: p.ingredients.map(i => ({ productId: i.product_id, quantity: i.quantity, unit: i.unit })) }),
+      { write: true }),
+    tool('nutrition_delete_portion', 'Delete only the saved portion the user has confirmed. Read it first and ask for confirmation; diary groups already created from it remain unchanged.',
+      { portion_id: uuid(), confirmed: z.literal(true) }, p => request('DELETE', `/api/nutrition/portions/${p.portion_id}`),
+      { write: true, destructive: true, idempotent: true }),
+    tool('nutrition_add_portion', 'Add one complete saved portion to an explicit local diary date. multiplier scales every ingredient quantity, preserving its unit. Piece weights and nutrition are snapshotted by Nutrition at application time. Reuse the same application_id and identical payload after uncertain writes.',
+      { application_id: uuid(), portion_id: uuid(), multiplier: quantity(), date: date(), time: time() },
+      p => request('POST', `/api/nutrition/portions/${p.portion_id}/apply`, {}, {
+        id: p.application_id, multiplier: p.multiplier, date: p.date, time: p.time ?? null
+      }), { write: true, idempotent: true })
   ]
 }

@@ -10,17 +10,19 @@ const mocks = vi.hoisted(() => ({ user: { id: 'u1' }, api: vi.fn() }))
 vi.mock('../lib/api.js', () => ({ api: mocks.api }))
 vi.mock('../store/useStore.js', () => ({ useStore: select => select({ user: mocks.user }) }))
 const values = { calories: 123.456, protein: 12.345, fat: 6.789, carbohydrates: 45.678 }
-const product = { id: 'b8d5423d-a4f6-4759-a3cb-71bd068da786', name: 'Buckwheat', brand: 'Acme', ...values }
+const product = { id: 'b8d5423d-a4f6-4759-a3cb-71bd068da786', name: 'Buckwheat', brand: 'Acme', gramsPerPiece: 40, ...values }
 const entry = { id: 'c8d5423d-a4f6-4759-a3cb-71bd068da786', productId: product.id, name: 'Historical buckwheat', brand: 'Acme', date: '2026-10-13', time: null, quantityGrams: 100, nutrition: values, per100Grams: values }
+const portion = { id: 'd8d5423d-a4f6-4759-a3cb-71bd068da786', name: 'Breakfast', ingredients: [{ productId: product.id, productName: product.name, productBrand: product.brand, quantity: 2, unit: 'pieces', gramsPerPiece: 40, productAvailable: true }] }
 const day = (date, entries = []) => ({ date, entries, totals: entries.length ? values : { calories: 0, protein: 0, fat: 0, carbohydrates: 0 } })
-let host, root, recorded
+let host, root, recorded, portionFixtures
 beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
-  mocks.user = { id: 'u1' }; mocks.api.mockReset(); recorded = []
+  mocks.user = { id: 'u1' }; mocks.api.mockReset(); recorded = []; portionFixtures = []
   vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-10-13T12:00:00').getTime())
   mocks.api.mockImplementation(async (path, opts) => {
     if (opts) return { ...entry, ...JSON.parse(opts.body || '{}') }
     if (path.startsWith('/api/nutrition/diary')) return day(new URL(path, 'http://test').searchParams.get('date'), recorded)
+    if (path === '/api/nutrition/portions') return { portions: portionFixtures }
     return { products: [product], hasMore: false }
   })
   await setLang('en')
@@ -110,12 +112,12 @@ it('navigates dates and discards a stale date response', async () => {
 it('adds selected food with grams and reuses the creation id after network failure', async () => {
   mount(); await settle(); click(button('Add food')); await settle()
   click(host.querySelector('.nutrition-choice'))
-  input(host.querySelector('[aria-label="Quantity (g)"]'), '125,5')
+  input(host.querySelector('[aria-label="Quantity"]'), '125,5')
   mocks.api.mockRejectedValueOnce(new Error('connection lost'))
   submit(host.querySelector('form')); await settle()
   const first = mocks.api.mock.calls.find(([path, opts]) => path === '/api/nutrition/entries' && opts)
   const payload = JSON.parse(first[1].body)
-  expect(payload).toMatchObject({ productId: product.id, quantityGrams: 125.5, time: null })
+  expect(payload).toMatchObject({ productId: product.id, quantity: 125.5, unit: 'grams', time: null })
   expect(payload.id).toMatch(/^[0-9a-f-]{36}$/)
   expect(host.querySelector('[role="alert"]')).not.toBe(null)
   submit(host.querySelector('form')); await settle()
@@ -130,14 +132,44 @@ it('edits a historical entry without replacing its snapshot and deletes with con
   expect(host.textContent).toContain('Historical buckwheat')
   expect(host.textContent).toContain('No time')
   click(button('Edit')); await settle()
-  input(host.querySelector('[aria-label="Quantity (g)"]'), '200')
+  input(host.querySelector('[aria-label="Quantity"]'), '200')
   submit(host.querySelector('form')); await settle()
   const update = mocks.api.mock.calls.find(([path, opts]) => path.endsWith(entry.id) && opts?.method === 'PUT')
-  expect(JSON.parse(update[1].body)).toMatchObject({ quantityGrams: 200, productId: null, time: null, date: entry.date })
+  expect(JSON.parse(update[1].body)).toMatchObject({ quantity: 200, unit: 'grams', productId: null, time: null, date: entry.date })
   click(button('Delete'))
   expect(mocks.api.mock.calls.some(([, opts]) => opts?.method === 'DELETE')).toBe(false)
   click(button('Confirm')); await settle()
   expect(mocks.api).toHaveBeenCalledWith('/api/nutrition/entries/' + entry.id, { method: 'DELETE' })
+})
+
+it('switches entry units without changing equivalent weight and shows the saved unit', async () => {
+  recorded = [{ ...entry, quantity: 100, unit: 'grams', gramsPerPiece: 40 }]; mount(); await settle()
+  expect(host.textContent).toContain('100 g')
+  click(button('Edit')); await settle()
+  const unit = host.querySelector('[aria-label="Unit"]')
+  act(() => { unit.value = 'pieces'; unit.dispatchEvent(new Event('change', { bubbles: true })) })
+  expect(host.querySelector('[aria-label="Quantity"]').value).toBe('2.5')
+  act(() => { unit.value = 'grams'; unit.dispatchEvent(new Event('change', { bubbles: true })) })
+  expect(host.querySelector('[aria-label="Quantity"]').value).toBe('100')
+  act(() => { unit.value = 'pieces'; unit.dispatchEvent(new Event('change', { bubbles: true })) })
+  submit(host.querySelector('form')); await settle()
+  const update = mocks.api.mock.calls.find(([path, opts]) => path.endsWith(entry.id) && opts?.method === 'PUT')
+  expect(JSON.parse(update[1].body)).toMatchObject({ quantity: 2.5, unit: 'pieces' })
+})
+
+it('adds fractional pieces and renders the saved piece abbreviation', async () => {
+  mount(); await settle(); click(button('Add food')); await settle()
+  click(host.querySelector('.nutrition-choice'))
+  const unit = host.querySelector('[aria-label="Unit"]')
+  act(() => { unit.value = 'pieces'; unit.dispatchEvent(new Event('change', { bubbles: true })) })
+  input(host.querySelector('[aria-label="Quantity"]'), '0,5')
+  submit(host.querySelector('form')); await settle()
+  const write = mocks.api.mock.calls.find(([path, opts]) => path === '/api/nutrition/entries' && opts)
+  expect(JSON.parse(write[1].body)).toMatchObject({ quantity: 0.5, unit: 'pieces', productId: product.id })
+  recorded = [{ ...entry, quantity: 0.5, unit: 'pieces' }]
+  act(() => root.unmount()); root = createRoot(host)
+  mount(); await settle()
+  expect(host.textContent).toContain('0.5 pcs')
 })
 
 it('explicit product selection replaces the entry snapshot', async () => {
@@ -154,10 +186,11 @@ it('creates, searches, edits and deletes catalog products', async () => {
   click(button('Create product'))
   const form = host.querySelector('form')
   input(form.querySelector('input'), 'Rice')
+  input(form.querySelector('[aria-label="Weight 1 piece (g)"]'), '35')
   for (const [label, value] of [['Calories (kcal)', '100'], ['Protein (g)', '2'], ['Fat (g)', '0'], ['Carbohydrates (g)', '20']]) input(form.querySelector(`[aria-label="${label}"]`), value)
   submit(form); await settle(); await settle()
   const created = mocks.api.mock.calls.find(([path, opts]) => path === '/api/nutrition/products' && opts?.method === 'POST')
-  expect(JSON.parse(created[1].body)).toEqual({ name: 'Rice', brand: '', calories: 100, protein: 2, fat: 0, carbohydrates: 20 })
+  expect(JSON.parse(created[1].body)).toEqual({ name: 'Rice', brand: '', gramsPerPiece: 35, calories: 100, protein: 2, fat: 0, carbohydrates: 20 })
   click(button('Edit')); input(host.querySelector('form input'), 'Updated rice'); submit(host.querySelector('form')); await settle(); await settle()
   expect(mocks.api.mock.calls.find(([, opts]) => opts?.method === 'PUT')[0]).toBe('/api/nutrition/products/' + product.id)
   click(button('Delete')); expect(host.textContent).toContain('Your diary history will be kept.')
@@ -174,4 +207,50 @@ it('creates a product inline and selects it for logging', async () => {
   submit(form); await settle()
   expect(host.textContent).toContain('Selected product: Milk')
   expect(host.querySelector('.nutrition-product-form')).toBe(null)
+})
+
+it('creates a mixed-unit standard portion from the portions tab', async () => {
+  mount(); await settle(); click(button('My portions')); await settle(); click(button('Create portion'))
+  const form = host.querySelector('.nutrition-form')
+  input(form.querySelector('input'), 'Breakfast')
+  await settle()
+  click(host.querySelector('.nutrition-choice')); click(button('Add ingredient'))
+  expect(host.textContent).toContain('Buckwheat')
+  click(button('Save')); await settle()
+  const write = mocks.api.mock.calls.find(([path, opts]) => path === '/api/nutrition/portions' && opts?.method === 'POST')
+  expect(JSON.parse(write[1].body)).toMatchObject({ name: 'Breakfast', ingredients: [{ productId: product.id, quantity: 100, unit: 'grams' }] })
+  expect(JSON.parse(write[1].body).id).toMatch(/^[0-9a-f-]{36}$/)
+})
+
+it('edits and deletes a saved portion without changing its diary entries', async () => {
+  portionFixtures = [portion]
+  mount(); await settle(); click(button('My portions')); await settle()
+  click(button('Edit'))
+  input(host.querySelector('.nutrition-form input'), 'Morning meal')
+  click(button('Save')); await settle()
+  const update = mocks.api.mock.calls.find(([path, opts]) => path.endsWith('/' + portion.id) && opts?.method === 'PUT')
+  expect(JSON.parse(update[1].body)).toMatchObject({ name: 'Morning meal', ingredients: [{ productId: product.id, quantity: 2, unit: 'pieces' }] })
+  click(button('Delete')); click(button('Confirm')); await settle()
+  expect(mocks.api).toHaveBeenCalledWith('/api/nutrition/portions/' + portion.id, { method: 'DELETE' })
+})
+
+it('applies a portion with its multiplier and renders diary components collapsed by default', async () => {
+  portionFixtures = [portion]
+  mount(); await settle()
+  expect(host.textContent).toContain('Add a portion')
+  input(host.querySelector('[aria-label="Multiplier"]'), '1.5')
+  click(button('Add'))
+  await settle()
+  const write = mocks.api.mock.calls.find(([path, opts]) => path.endsWith('/apply') && opts?.method === 'POST')
+  expect(JSON.parse(write[1].body)).toMatchObject({ multiplier: 1.5 })
+  expect(JSON.parse(write[1].body).id).toMatch(/^[0-9a-f-]{36}$/)
+
+  recorded = [{ ...entry, portionGroupId: portion.id, portionName: 'Breakfast', quantity: 2, unit: 'pieces' }]
+  act(() => root.unmount()); root = createRoot(host); mount(); await settle()
+  const group = host.querySelector('.nutrition-portion-group details')
+  expect(group.open).toBe(false)
+  expect(host.textContent).toContain('Breakfast')
+  click(group.querySelector('summary'))
+  expect(group.open).toBe(true)
+  expect(host.textContent).toContain('Historical buckwheat')
 })

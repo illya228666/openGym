@@ -47,11 +47,20 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                     b.Property<decimal>("Fat")
                         .HasColumnType("TEXT");
 
+                    b.Property<decimal?>("GramsPerPiece")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("PortionGroupId")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Name")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PortionName")
                         .HasColumnType("TEXT");
 
                     b.Property<Guid>("ProductId")
@@ -63,7 +72,11 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                     b.Property<string>("ProvenanceJson")
                         .HasColumnType("TEXT");
 
-                    b.Property<decimal>("QuantityGrams")
+                    b.Property<decimal>("Quantity")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Unit")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<TimeOnly?>("Time")
@@ -74,6 +87,61 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                     b.HasIndex("UserId", "Date", "IsDeleted");
 
                     b.ToTable("DiaryEntries");
+                });
+
+            modelBuilder.Entity("OpenGym.Nutrition.Domain.PortionGroup", b =>
+                {
+                    b.Property<string>("UserId").HasColumnType("TEXT");
+                    b.Property<Guid>("Id").HasColumnType("TEXT");
+                    b.Property<string>("CreationFingerprint").IsRequired().HasColumnType("TEXT");
+                    b.Property<DateOnly>("Date").HasColumnType("TEXT");
+                    b.Property<DateTime>("CreatedAtUtc").HasColumnType("TEXT");
+                    b.Property<decimal>("Multiplier").HasColumnType("TEXT");
+                    b.Property<string>("Name").IsRequired().HasMaxLength(200).HasColumnType("TEXT");
+                    b.Property<TimeOnly?>("Time").HasColumnType("TEXT");
+                    b.HasKey("UserId", "Id");
+                    b.ToTable("PortionGroups");
+                });
+
+            modelBuilder.Entity("OpenGym.Nutrition.Domain.PortionIngredient", b =>
+                {
+                    b.Property<string>("UserId").HasColumnType("TEXT");
+                    b.Property<Guid>("PortionId").HasColumnType("TEXT");
+                    b.Property<int>("Position").HasColumnType("INTEGER");
+                    b.Property<Guid>("ProductId").HasColumnType("TEXT");
+                    b.Property<string>("ProductName").IsRequired().HasColumnType("TEXT");
+                    b.Property<string>("ProductBrand").HasColumnType("TEXT");
+                    b.Property<decimal>("Quantity").HasColumnType("TEXT");
+                    b.Property<string>("Unit").IsRequired().HasColumnType("TEXT");
+                    b.HasKey("UserId", "PortionId", "Position");
+                    b.ToTable("PortionIngredients");
+                });
+
+            modelBuilder.Entity("OpenGym.Nutrition.Domain.PortionTemplate", b =>
+                {
+                    b.Property<string>("UserId").HasColumnType("TEXT");
+                    b.Property<Guid>("Id").HasColumnType("TEXT");
+                    b.Property<string>("CreationFingerprint").IsRequired().HasColumnType("TEXT");
+                    b.Property<DateTime>("CreatedAtUtc").HasColumnType("TEXT");
+                    b.Property<bool>("IsDeleted").HasColumnType("INTEGER");
+                    b.Property<string>("Name").IsRequired().HasMaxLength(200).HasColumnType("TEXT");
+                    b.HasKey("UserId", "Id");
+                    b.HasIndex("UserId", "IsDeleted");
+                    b.ToTable("PortionTemplates");
+                });
+
+            modelBuilder.Entity("OpenGym.Nutrition.Domain.PortionIngredient", b =>
+                {
+                    b.HasOne("OpenGym.Nutrition.Domain.PortionTemplate", null)
+                        .WithMany("Ingredients")
+                        .HasForeignKey("UserId", "PortionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("OpenGym.Nutrition.Domain.PortionTemplate", b =>
+                {
+                    b.Navigation("Ingredients");
                 });
 
             modelBuilder.Entity("OpenGym.Nutrition.Domain.Product", b =>
@@ -110,6 +178,9 @@ namespace OpenGym.Nutrition.Persistence.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<decimal>("Fat")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("GramsPerPiece")
                         .HasColumnType("TEXT");
 
                     b.Property<bool>("IsDeleted")
