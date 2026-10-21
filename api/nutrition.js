@@ -8,9 +8,9 @@ if (!['http:', 'https:'].includes(target.protocol) || target.username || target.
 /** MCP uses the same HTTP service, with a short-lived operation-bound credential, never SQLite. */
 export async function requestNutrition(method, pathname, query = {}, body, credential) {
   const known = nutritionRoute(method, pathname)
-    || (method === 'GET' && ['/api/nutrition/products', '/api/nutrition/diary', '/api/nutrition/external/products', '/api/nutrition/reference-foods'].includes(pathname))
+    || (method === 'GET' && ['/api/nutrition/products', '/api/nutrition/diary', '/api/nutrition/portions', '/api/nutrition/external/products', '/api/nutrition/reference-foods'].includes(pathname))
     || (method === 'POST' && pathname === '/api/nutrition/products/import')
-    || (method === 'POST' && ['/api/nutrition/entries', '/api/nutrition/products'].includes(pathname));
+    || (method === 'POST' && ['/api/nutrition/entries', '/api/nutrition/products', '/api/nutrition/portions'].includes(pathname));
   if (!known) throw new Error('Unsupported Nutrition operation');
   const url = new URL(pathname, base);
   for (const key of nutritionQuery(pathname))
@@ -61,7 +61,9 @@ export async function nutritionHello(req, res, { readSession, json }) {
 export function nutritionRoute(method, pathname) {
   if (method === 'GET' && /^\/api\/nutrition\/external\/products\/[0-9]{8,14}$/.test(pathname))
     return 'GET /api/nutrition/external/products/{externalId}';
-  const item = /^\/api\/nutrition\/(products|entries)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec(pathname);
+  const portionApplication = /^\/api\/nutrition\/portions\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/apply$/i.exec(pathname);
+  if (method === 'POST' && portionApplication) return 'POST /api/nutrition/portions/{id}/apply';
+  const item = /^\/api\/nutrition\/(products|entries|portions)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec(pathname);
   return item && ['GET', 'PUT', 'DELETE'].includes(method) ? `${method} /api/nutrition/${item[1]}/{id}` : null;
 }
 

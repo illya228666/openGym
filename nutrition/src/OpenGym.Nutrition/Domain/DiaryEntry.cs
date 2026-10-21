@@ -8,7 +8,11 @@ public sealed class DiaryEntry
     public Guid ProductId { get; set; }
     public DateOnly Date { get; set; }
     public TimeOnly? Time { get; set; }
-    public decimal QuantityGrams { get; set; }
+    public decimal Quantity { get; set; }
+    public string Unit { get; set; } = "grams";
+    public decimal? GramsPerPiece { get; set; }
+    public Guid? PortionGroupId { get; set; }
+    public string? PortionName { get; set; }
     public string Name { get; set; } = "";
     public string? Brand { get; set; }
     public decimal Calories { get; set; }

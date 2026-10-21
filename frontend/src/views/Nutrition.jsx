@@ -45,6 +45,7 @@ function FoodDiary() {
   const [tab, setTab] = useState('diary')
   const [attempt, setAttempt] = useState(0)
   const [diary, setDiary] = useState(null)
+  const [portions, setPortions] = useState([])
   const [error, setError] = useState(null)
   const [form, setForm] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -62,19 +63,28 @@ function FoodDiary() {
     }).catch(e => { if (current) setError(e) })
     return () => { current = false }
   }, [date, attempt])
+  useEffect(() => {
+    let current = true
+    api('/api/nutrition/portions').then(body => {
+      if (!Array.isArray(body.portions)) throw new Error('Invalid portions')
+      if (current) setPortions(body.portions)
+    }).catch(() => { if (current) setPortions([]) })
+    return () => { current = false }
+  }, [attempt])
   const changeDate = next => { if (next) { setDate(next); setForm(null); setDeleting(null) } }
   const mutate = async operation => {
-    if (writing.current) return
+    if (writing.current) return false
     writing.current = true; setBusy(true); setError(null)
     try {
       await operation()
       if (live.current) { setForm(null); setDeleting(null); setAttempt(n => n + 1) }
+      return true
     } catch (e) { if (live.current) setError(e) }
     finally { writing.current = false; if (live.current) setBusy(false) }
   }
   return <section className="nutrition-page">
     <Segmented value={tab} onChange={value => { if (!busy) { setTab(value); setForm(null); setDeleting(null); setError(null) } }}
-      options={[{ value: 'diary', label: t('Food diary') }, { value: 'products', label: t('My products') }]} />
+      options={[{ value: 'diary', label: t('Food diary') }, { value: 'portions', label: t('My portions') }, { value: 'products', label: t('My products') }]} />
     {error && <div className="nutrition-error" role="alert"><p>{failureText(error)}</p>
       <Button disabled={busy} onClick={() => setAttempt(n => n + 1)}>{t('Retry')}</Button></div>}
     {tab === 'diary' ? <>
@@ -86,6 +96,8 @@ function FoodDiary() {
       </div>
       {diary && <div className="card"><h2>{t('Daily totals')}</h2><NutritionValues values={diary.totals} /></div>}
       {!form && <Button variant="primary" icon="plus" disabled={busy} onClick={() => { setError(null); setForm({ kind: 'entry', date }) }}>{t('Add food')}</Button>}
+      {portions.length > 0 && <div className="nutrition-portion-shortcuts"><h2>{t('Add a portion')}</h2>{portions.map(portion => <ApplyPortion key={portion.id + date} portion={portion} date={date} busy={busy}
+        onApply={request => mutate(() => api(`/api/nutrition/portions/${portion.id}/apply`, { method: 'POST', body: JSON.stringify(request) }))} />)}</div>}
       {form?.kind === 'entry' && <EntryForm key={form.entry?.id || 'new'} entry={form.entry} date={form.date}
         busy={busy} onCancel={() => setForm(null)} onSave={request => mutate(() => api('/api/nutrition/entries' + (form.entry ? '/' + form.entry.id : ''),
           { method: form.entry ? 'PUT' : 'POST', body: JSON.stringify(request) }))} />}
@@ -93,19 +105,115 @@ function FoodDiary() {
       {diary && <>
         <h2>{t('Consumed food')}</h2>
         {!diary.entries.length ? <p className="empty">{t('No food recorded for this day. Add your first product.')}</p>
-          : <ul className="nutrition-list">{diary.entries.map(entry => <li key={entry.id}>
-            <div className="nutrition-row"><div><strong>{entry.name}</strong>{entry.brand && <p>{entry.brand}</p>}
-              <p>{format(entry.quantityGrams, 3)} {t('Grams')} · {entry.time || t('No time')}</p></div>
-              <div className="nutrition-actions"><Button disabled={busy} onClick={() => { setError(null); setDeleting(null); setForm({ kind: 'entry', entry, date: entry.date }) }}>{t('Edit')}</Button>
-                <Button disabled={busy} onClick={() => setDeleting(entry.id)}>{t('Delete')}</Button></div></div>
-            <NutritionValues values={entry.nutrition} />
-            {deleting === entry.id && <div className="nutrition-actions"><span>{t('Delete this diary entry?')}</span>
-              <Button disabled={busy} onClick={() => mutate(() => api('/api/nutrition/entries/' + entry.id, { method: 'DELETE' }))}>{t('Confirm')}</Button>
-              <Button disabled={busy} onClick={() => setDeleting(null)}>{t('Cancel')}</Button></div>}
-          </li>)}</ul>}
+          : <ul className="nutrition-list">{renderGroupedEntries(diary.entries).map(item => item.type === 'group'
+            ? <li key={item.id} className="nutrition-portion-group"><details><summary><strong>{item.name}</strong></summary>
+              <ul className="nutrition-list nutrition-portion-ingredients">{item.entries.map(entry => renderEntry(entry))}</ul>
+              <NutritionValues values={item.entries.reduce((total, entry) => Object.fromEntries(nutrients.map(([key]) => [key, total[key] + entry.nutrition[key]])), { calories: 0, protein: 0, fat: 0, carbohydrates: 0 })} />
+            </details></li>
+            : renderEntry(item.entry))}</ul>}
       </>}
-    </> : <ProductCatalog key={attempt} busy={busy} onMutation={mutate} />}
+    </> : tab === 'products' ? <ProductCatalog key={attempt} busy={busy} onMutation={mutate} />
+      : <PortionCatalog key={attempt} busy={busy} portions={portions} onMutation={mutate} />}
   </section>
+
+  function renderEntry(entry) {
+    return <li key={entry.id}>
+      <div className="nutrition-row"><div><strong>{entry.name}</strong>{entry.brand && <p>{entry.brand}</p>}
+        <p>{format(entry.quantity ?? entry.quantityGrams, 3)} {entry.unit === 'pieces' ? t('pcs') : t('g')} · {entry.time || t('No time')}</p></div>
+        <div className="nutrition-actions"><Button disabled={busy} onClick={() => { setError(null); setDeleting(null); setForm({ kind: 'entry', entry, date: entry.date }) }}>{t('Edit')}</Button>
+          <Button disabled={busy} onClick={() => setDeleting(entry.id)}>{t('Delete')}</Button></div></div>
+      <NutritionValues values={entry.nutrition} />
+      {deleting === entry.id && <div className="nutrition-actions"><span>{t('Delete this diary entry?')}</span>
+        <Button disabled={busy} onClick={() => mutate(() => api('/api/nutrition/entries/' + entry.id, { method: 'DELETE' }))}>{t('Confirm')}</Button>
+        <Button disabled={busy} onClick={() => setDeleting(null)}>{t('Cancel')}</Button></div>}
+    </li>
+  }
+}
+
+function renderGroupedEntries(entries) {
+  const items = []
+  const groups = new Map()
+  for (const entry of entries) {
+    if (!entry.portionGroupId) { items.push({ type: 'entry', id: entry.id, entry }); continue }
+    let group = groups.get(entry.portionGroupId)
+    if (!group) { group = { type: 'group', id: entry.portionGroupId, name: entry.portionName || '', entries: [] }; groups.set(entry.portionGroupId, group); items.push(group) }
+    group.entries.push(entry)
+  }
+  return items
+}
+
+function ApplyPortion({ portion, date, busy, onApply }) {
+  const [multiplier, setMultiplier] = useState(1)
+  const [id, setId] = useState(() => crypto.randomUUID())
+  const [submitted, setSubmitted] = useState(false)
+  const available = portion.ingredients.every(item => item.productAvailable !== false)
+  return <form className="nutrition-portion-apply" onSubmit={async e => {
+    e.preventDefault()
+    if (busy || !(multiplier > 0)) return
+    setSubmitted(true)
+    if (await onApply({ id, multiplier, date, time: null })) { setId(crypto.randomUUID()); setSubmitted(false) }
+  }}>
+    <strong>{portion.name}</strong>
+    {!available && <span>{t('Replace unavailable products in this portion before adding it.')}</span>}
+    <NumberField className="field" aria-label={t('Multiplier')} disabled={busy || submitted} value={multiplier} onChange={setMultiplier} />
+    <Button type="submit" disabled={busy || !multiplier || !available}>{t('Add')}</Button>
+  </form>
+}
+
+function PortionCatalog({ busy, portions, onMutation }) {
+  const [editing, setEditing] = useState(null)
+  const [deleting, setDeleting] = useState(null)
+  return <>
+    {!editing && <Button variant="primary" icon="plus" disabled={busy} onClick={() => setEditing({ name: '', ingredients: [] })}>{t('Create portion')}</Button>}
+    {editing && <PortionForm key={editing.id || 'new'} portion={editing} busy={busy} onCancel={() => setEditing(null)}
+      onSave={request => onMutation(() => api('/api/nutrition/portions' + (editing.id ? '/' + editing.id : ''),
+        { method: editing.id ? 'PUT' : 'POST', body: JSON.stringify(request) }))} />}
+    <ul className="nutrition-list">{portions.map(portion => <li key={portion.id}>
+      <div className="nutrition-row"><strong>{portion.name}</strong><div className="nutrition-actions">
+        <Button disabled={busy} onClick={() => { setDeleting(null); setEditing(portion) }}>{t('Edit')}</Button>
+        <Button disabled={busy} onClick={() => setDeleting(portion.id)}>{t('Delete')}</Button></div></div>
+      {deleting === portion.id && <div className="nutrition-actions"><span>{t('Delete this portion?')}</span>
+        <Button disabled={busy} onClick={() => onMutation(() => api('/api/nutrition/portions/' + portion.id, { method: 'DELETE' }))}>{t('Confirm')}</Button>
+        <Button disabled={busy} onClick={() => setDeleting(null)}>{t('Cancel')}</Button></div>}
+      <ul className="nutrition-portion-ingredients">{portion.ingredients.map((ingredient, index) => <li key={index}>{ingredient.productName} · {format(ingredient.quantity, 3)} {ingredient.unit === 'pieces' ? t('pcs') : t('g')}</li>)}</ul>
+    </li>)}</ul>
+    {!portions.length && !editing && <p className="empty">{t('No portions yet.')}</p>}
+  </>
+}
+
+function PortionForm({ portion, busy, onCancel, onSave }) {
+  const [name, setName] = useState(portion.name || '')
+  const [ingredients, setIngredients] = useState((portion.ingredients || []).map(item => ({ ...item })))
+  const [product, setProduct] = useState(null)
+  const [submitted, setSubmitted] = useState(false)
+  const [id] = useState(() => portion.id || crypto.randomUUID())
+  const addProduct = () => {
+    if (!product) return
+    setIngredients(current => [...current, { productId: product.id, productName: product.name, productBrand: product.brand,
+      gramsPerPiece: product.gramsPerPiece, quantity: 100, unit: 'grams' }])
+    setProduct(null)
+  }
+  const updateIngredient = (index, changes) => setIngredients(current => current.map((item, i) => i === index ? { ...item, ...changes } : item))
+  return <div className="card nutrition-form">
+    <h2>{portion.id ? t('Edit portion') : t('Create portion')}</h2>
+    <label>{t('Portion name')}<TextField disabled={busy || (!portion.id && submitted)} value={name} maxLength={200} onChange={e => setName(e.target.value)} required /></label>
+    <ProductPicker disabled={busy || (!portion.id && submitted)} selected={product?.id} onSelect={setProduct} />
+    {product && <div className="nutrition-actions"><span>{product.name}</span><Button disabled={busy || (!portion.id && submitted)} onClick={addProduct}>{t('Add ingredient')}</Button></div>}
+    <ul className="nutrition-list">{ingredients.map((item, index) => <li key={index}>
+      <div className="nutrition-fields"><strong>{item.productName}</strong>
+        <label>{t('Quantity')}<NumberField className="field" disabled={busy || (!portion.id && submitted)} aria-label={`${t('Quantity')} ${index + 1}`} value={item.quantity} nullable onChange={value => updateIngredient(index, { quantity: value })} required /></label>
+        <label>{t('Unit')}<select className="field" disabled={busy || (!portion.id && submitted)} value={item.unit} onChange={e => {
+          const next = e.target.value
+          const grams = item.unit === 'pieces' ? item.quantity * item.gramsPerPiece : item.quantity
+          updateIngredient(index, { unit: next, quantity: Math.round((next === 'pieces' ? grams / item.gramsPerPiece : grams) * 1000) / 1000 })
+        }}><option value="grams">{t('g')}</option><option value="pieces" disabled={!(item.gramsPerPiece > 0)}>{t('pcs')}</option></select></label>
+        <Button type="button" disabled={busy || (!portion.id && submitted)} onClick={() => setIngredients(current => current.filter((_, i) => i !== index))}>{t('Remove')}</Button>
+      </div>
+    </li>)}</ul>
+    <div className="nutrition-actions"><Button variant="primary" disabled={busy || !name.trim() || !ingredients.length || ingredients.some(item => !(item.quantity > 0))}
+      onClick={() => { if (!portion.id) setSubmitted(true); onSave({ ...(portion.id ? {} : { id }), name, ingredients: ingredients.map(({ productId, quantity, unit }) => ({ productId, quantity, unit })) }) }}>{t('Save')}</Button>
+      <Button disabled={busy} onClick={onCancel}>{t('Cancel')}</Button></div>
+  </div>
 }
 
 function ProductPicker({ selected, onSelect, refresh = 0, disabled = false, renderActions }) {
@@ -150,13 +258,31 @@ function ProductPicker({ selected, onSelect, refresh = 0, disabled = false, rend
 
 function EntryForm({ entry, date, busy, onSave, onCancel }) {
   const [product, setProduct] = useState(null)
-  const [quantityGrams, setQuantity] = useState(entry?.quantityGrams ?? 100)
+  const [quantity, setQuantity] = useState(entry?.quantity ?? entry?.quantityGrams ?? 100)
+  const [unit, setUnit] = useState(entry?.unit ?? 'grams')
+  const [originalGramsPerPiece, setOriginalGramsPerPiece] = useState(entry?.gramsPerPiece ?? null)
   const [day, setDay] = useState(date)
   const [time, setTime] = useState(entry?.time || '')
   const [creating, setCreating] = useState(false)
   const [refresh, setRefresh] = useState(0)
   // Kept for the lifetime of this form, including an uncertain network failure.
   const [id] = useState(() => entry?.id || crypto.randomUUID())
+  useEffect(() => {
+    if (!entry || originalGramsPerPiece != null) return
+    let current = true
+    api(`/api/nutrition/products/${entry.productId}`).then(result => {
+      if (current && Number.isFinite(result.gramsPerPiece) && result.gramsPerPiece > 0) setOriginalGramsPerPiece(result.gramsPerPiece)
+    }).catch(() => {})
+    return () => { current = false }
+  }, [entry, originalGramsPerPiece])
+  const gramsPerPiece = product ? product.gramsPerPiece : originalGramsPerPiece
+  const changeUnit = nextUnit => {
+    if (nextUnit === unit) return
+    if (nextUnit === 'pieces' && !(gramsPerPiece > 0)) return
+    const grams = unit === 'grams' ? quantity : quantity * gramsPerPiece
+    setQuantity(Math.round((nextUnit === 'grams' ? grams : grams / gramsPerPiece) * 1000) / 1000)
+    setUnit(nextUnit)
+  }
   return <div className="card nutrition-form">
     <h2>{entry ? t('Edit food') : t('Add food')}</h2>
     {entry && !product && <p>{t('Keeping the original nutritional snapshot.')}: <strong>{entry.name}</strong></p>}
@@ -168,13 +294,16 @@ function EntryForm({ entry, date, busy, onSave, onCancel }) {
       const result = await api('/api/nutrition/products', { method: 'POST', body: JSON.stringify(request) })
       setProduct(result); setCreating(false); setRefresh(n => n + 1)
     }} />}
-    <form onSubmit={e => { e.preventDefault(); if (!busy) onSave({ ...(entry ? {} : { id }), productId: product?.id || null, quantityGrams, date: day, time: time || null }) }}>
+    <form onSubmit={e => { e.preventDefault(); if (!busy) onSave({ ...(entry ? {} : { id }), productId: product?.id || null, quantity, unit, date: day, time: time || null }) }}>
       <div className="nutrition-fields">
-        <label>{t('Quantity (g)')}<NumberField className="field" disabled={busy} aria-label={t('Quantity (g)')} value={quantityGrams} nullable onChange={setQuantity} required /></label>
+        <label>{t('Quantity')}<NumberField className="field" disabled={busy} aria-label={t('Quantity')} value={quantity} nullable onChange={setQuantity} required /></label>
+        <label>{t('Unit')}<select className="field" aria-label={t('Unit')} disabled={busy} value={unit} onChange={e => changeUnit(e.target.value)}>
+          <option value="grams">{t('g')}</option><option value="pieces" disabled={!(gramsPerPiece > 0)}>{t('pcs')}</option>
+        </select></label>
         <label>{t('Consumption date')}<TextField disabled={busy} type="date" min="0001-01-01" max="9999-12-31" value={day} onChange={e => setDay(e.target.value)} required /></label>
         <label>{t('Time (optional)')}<TextField disabled={busy} type="time" value={time} onChange={e => setTime(e.target.value)} /></label>
       </div>
-      <div className="nutrition-actions"><Button variant="primary" type="submit" disabled={busy || creating || (!entry && !product) || !quantityGrams || quantityGrams > 100000 || !day}>{busy ? t('Saving…') : t('Save')}</Button>
+      <div className="nutrition-actions"><Button variant="primary" type="submit" disabled={busy || creating || (!entry && !product) || !quantity || quantity > 100000 || !day}>{busy ? t('Saving…') : t('Save')}</Button>
         <Button type="button" disabled={busy} onClick={onCancel}>{t('Cancel')}</Button></div>
     </form>
   </div>
@@ -198,7 +327,8 @@ function ProductCatalog({ busy, onMutation }) {
 }
 
 function ProductForm({ product = {}, busy, onSave, onCancel }) {
-  const [draft, setDraft] = useState({ name: product.name || '', brand: product.brand || '', ...Object.fromEntries(nutrients.map(([key]) => [key, product[key] ?? null])) })
+  const [draft, setDraft] = useState({ name: product.name || '', brand: product.brand || '', gramsPerPiece: product.gramsPerPiece ?? null,
+    ...Object.fromEntries(nutrients.map(([key]) => [key, product[key] ?? null])) })
   const [pending, setPending] = useState(false)
   const [error, setError] = useState(null)
   const saving = useRef(false)
@@ -213,6 +343,7 @@ function ProductForm({ product = {}, busy, onSave, onCancel }) {
     <h2>{product.id ? t('Edit product') : t('Create product')}</h2>
     <label>{t('Product name')}<TextField disabled={pending || busy} value={draft.name} maxLength={200} required onChange={e => update('name', e.target.value)} /></label>
     <label>{t('Brand (optional)')}<TextField disabled={pending || busy} value={draft.brand} maxLength={100} onChange={e => update('brand', e.target.value)} /></label>
+    <label>{t('Weight 1 piece (g)')}<NumberField className="field" disabled={pending || busy} aria-label={t('Weight 1 piece (g)')} value={draft.gramsPerPiece} nullable onChange={value => update('gramsPerPiece', value)} /></label>
     <p>{t('Nutritional values per 100 g')}</p>
     <div className="nutrition-fields">{nutrients.map(([key, label]) => <label key={key}>{t(label)}
       <NumberField className="field" disabled={pending || busy} value={draft[key]} nullable required aria-label={t(label)} onChange={value => update(key, value)} /></label>)}</div>

@@ -18,7 +18,7 @@ public sealed partial class NutritionService
         if (request.Id is null || request.Id == Guid.Empty || string.IsNullOrEmpty(name) || name.Length > 200 || brand?.Length > 100
             || !ValidValue(request.Calories, 1000) || !ValidValue(request.Protein, 100) || !ValidValue(request.Fat, 100)
             || !ValidValue(request.Carbohydrates, 100) || request.Protein + request.Fat + request.Carbohydrates > 100.003m
-            || request.FoodState is not ("raw" or "ready" or "cooked")) throw Invalid();
+            || !ValidPieceWeight(request.GramsPerPiece) || request.FoodState is not ("raw" or "ready" or "cooked")) throw Invalid();
         string[] methods = ["cooked", "roasted", "baked", "grilled", "boiled", "fried", "air_fried", "steamed", "stewed", "braised"];
         if (request.FoodState == "cooked" ? !methods.Contains(request.CookingMethod) : request.CookingMethod is not null) throw Invalid();
         var dataOrigin = request.DataOrigin ?? (request.Source is null ? "ai_estimate" : "verified_reference");
@@ -63,6 +63,7 @@ public sealed partial class NutritionService
                     || product.Calories != nutrients.Calories || product.Protein != nutrients.Protein
                     || product.Fat != nutrients.Fat || product.Carbohydrates != nutrients.Carbohydrates))
                     throw new NutritionException(409, "product_definition_conflict");
+                if (request.GramsPerPiece is not null) product.GramsPerPiece = request.GramsPerPiece;
             }
             else
             {
@@ -70,6 +71,7 @@ public sealed partial class NutritionService
                     SearchText = ProductSearch.Normalize(name + " " + brand + " " + source?.Description),
                     BrandSearchText = ProductSearch.Normalize(brand ?? ""),
                     Calories = nutrients.Calories, Protein = nutrients.Protein, Fat = nutrients.Fat, Carbohydrates = nutrients.Carbohydrates,
+                    GramsPerPiece = request.GramsPerPiece,
                     CatalogKey = catalogKey, ProvenanceJson = JsonSerializer.Serialize(provenance) };
                 db.Products.Add(product);
             }

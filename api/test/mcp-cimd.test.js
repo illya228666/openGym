@@ -120,6 +120,12 @@ test('CIMD consent and persistent refresh preserve scopes, account checks and re
   assert.equal((await oauth.verify(tokens.access_token)).user.id, 'alice');
   assert.equal(oauth.grants('alice').length, 1);
   if (scenario.scopes.includes('nutrition.read')) assert.equal(oauth.nutritionIdentity(delegated).user.id, 'alice');
+  const portionRead = oauth.nutritionCredential(principal, 'GET', '/api/nutrition/portions');
+  const portionWrite = oauth.nutritionCredential(principal, 'POST', '/api/nutrition/portions/00000000-0000-0000-0000-000000000001/apply');
+  const invalidPortionWrite = oauth.nutritionCredential(principal, 'GET', '/api/nutrition/portions/00000000-0000-0000-0000-000000000001/apply');
+  if (scenario.scopes.includes('nutrition.read')) assert.equal(oauth.nutritionIdentity(portionRead).user.id, 'alice');
+  if (scenario.scopes.includes('nutrition.write')) assert.equal(oauth.nutritionIdentity(portionWrite).user.id, 'alice');
+  assert.equal(oauth.nutritionIdentity(invalidPortionWrite), null);
   user.disabled = true;
   await assert.rejects(oauth.verify(tokens.access_token), { status: 401 });
   assert.equal((await refresh(tokens.refresh_token)).status, 400);
