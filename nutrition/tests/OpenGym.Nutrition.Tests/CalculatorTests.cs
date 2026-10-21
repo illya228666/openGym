@@ -13,6 +13,13 @@ public sealed class CalculatorTests
     }
 
     [Fact]
+    public void PieceConversionMayProduceSixDecimalGramEquivalent()
+    {
+        var value = NutritionCalculator.ForQuantity(new(300, 30, 10, 20), 1.000001m);
+        Assert.Equal(new Nutrients(3.000003m, 0.3000003m, 0.1000001m, 0.2000002m), value);
+    }
+
+    [Fact]
     public void TotalsDoNotRoundEachEntry()
     {
         var entry = NutritionCalculator.ForQuantity(new(1, 2, 3, 4), 0.1m);
@@ -25,7 +32,7 @@ public sealed class CalculatorTests
     [InlineData("0")]
     [InlineData("-1")]
     [InlineData("100000.001")]
-    [InlineData("0.0001")]
+    [InlineData("0.0000001")]
     public void InvalidQuantityIsRejected(string quantity) => Assert.Throws<ArgumentOutOfRangeException>(() =>
         NutritionCalculator.ForQuantity(new(1, 2, 3, 4), decimal.Parse(quantity, System.Globalization.CultureInfo.InvariantCulture)));
 }

@@ -36,7 +36,7 @@ import { stampPut } from './sync-stamps.js';
 import { atomicWrite as durableWrite } from './durable.js';
 import { nutritionHello, nutritionProxy, nutritionRoute, requestNutrition } from './nutrition.js';
 import { createMcpConfiguration } from './mcp-config.js';
-import { nudgeFor, nudgeWindowOpen, toneOf } from './nudge.js';
+import { excusedOn, nudgeFor, nudgeWindowOpen, toneOf } from './nudge.js';
 
 const PORT = +(process.env.PORT || 3000);
 const DATA = process.env.DATA_DIR || '/data';
@@ -240,8 +240,33 @@ const PUSH_TIMEOUT_MS = 10000;
 const PUSH_CONCURRENCY = 6;
 const MAX_SUBS_PER_USER = 20;
 
+function parseAllowedPrivateIps(raw) {
+  const list = new net.BlockList();
+  for (const entry of String(raw || '').split(/[\s,]+/).filter(Boolean)) {
+    const [from, to] = entry.split('-');
+    const [addr, prefix] = entry.split('/');
+    const family = net.isIPv6(addr) || net.isIPv6(from) ? 'ipv6' : 'ipv4';
+    try {
+      if (to !== undefined) list.addRange(from, to, family);
+      else if (prefix !== undefined && /^\d{1,3}$/.test(prefix)) list.addSubnet(addr, +prefix, family);
+      else if (net.isIP(entry)) list.addAddress(entry, family);
+      else throw new Error('not an address, range or CIDR block');
+    } catch {
+      console.warn(`ALLOWED_PRIVATE_IPS entry "${entry.slice(0, 60)}" is not a valid address, range or CIDR block — ignored`);
+    }
+  }
+  return list;
+}
+const ALLOWED_PRIVATE_IPS = parseAllowedPrivateIps(process.env.ALLOWED_PRIVATE_IPS);
+
+function isAllowedPrivateAddr(v) {
+  const family = net.isIPv6(v) ? 'ipv6' : net.isIPv4(v) ? 'ipv4' : null;
+  return family !== null && ALLOWED_PRIVATE_IPS.check(v.replace(/%.*$/, ''), family);
+}
+
 function isPrivateAddr(ip) {
   const v = String(ip).toLowerCase();
+  if (isAllowedPrivateAddr(v)) return false;
   const m4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(v);
   if (m4) {
     const a = +m4[1], b = +m4[2];
@@ -493,6 +518,7 @@ setInterval(() => {
       if (!(late >= 0 && late <= REMINDER_WINDOW_MIN)) continue;
       if (user.lastReminder === now.date) continue;
       if ((S.workouts || []).some(w => w?.d === now.date)) continue;
+      if (excusedOn(S, now.date)) continue; // noted as sick, away, … (nudge.js excusedOn)
       const rid = effectiveRoutineId(S, now.date);
       if (!rid) continue; // rest day — nothing planned
       const routine = (S.routines || []).find(r => r?.id === rid);
@@ -758,15 +784,28 @@ const b64uToBuf = s => Buffer.from(s, 'base64url');
 /* ---------- live presence (in-memory) ---------- */
 // Clients heartbeat /api/activity while a workout is on screen; the admin dashboard reads who's
 // live. Purely ephemeral — never persisted. Expires shortly after the last ping.
-const presence = new Map();               // uid -> { name, exIdx, exTotal, setsDone, setsTotal, startedAt, updatedAt }
+const presence = new Map();               // uid -> { name, exIdx, exTotal, setsDone, setsTotal, startedAt, updatedAt, hiddenAt? }
 const PRESENCE_TTL = 70000;               // ~3.5× the 20s client heartbeat
+// A "left" signal with reason `hidden` (the workout page went to the background) marks the row
+// away at that moment instead of dropping it. A phone locked between sets keeps the page running
+// and heartbeating, and the next heartbeat clears the mark, so the athlete never blinks off the
+// dashboard; an iOS home-screen app swiped away sends `hidden` and nothing after it, so it is gone
+// this long after instead of the full TTL. Two heartbeat intervals and 5 s: browsers throttle a
+// hidden page's timers, so its first heartbeat after the hide can run late, and one late
+// heartbeat must not take a locked phone off the list.
+const PRESENCE_HIDDEN_GRACE = 45000;
+// Whether a row counts as "training now". The one place that decides it: the admin list and the
+// sweep below both ask here.
+const presenceListed = (p, now) =>
+  now - p.updatedAt < PRESENCE_TTL && (p.hiddenAt === undefined || now - p.hiddenAt < PRESENCE_HIDDEN_GRACE);
 function livePresence(uid) {
   const p = presence.get(uid);
   if (!p) return null;
-  if (Date.now() - p.updatedAt > PRESENCE_TTL) { presence.delete(uid); return null; }
-  return p;
+  if (!presenceListed(p, Date.now())) { presence.delete(uid); return null; }
+  const { hiddenAt: _away, ...live } = p;   // the mark is bookkeeping; the dashboard gets the row it always did
+  return live;
 }
-setInterval(() => { for (const [k, v] of presence) if (Date.now() - v.updatedAt > PRESENCE_TTL) presence.delete(k); }, 30000).unref();
+setInterval(() => { const now = Date.now(); for (const [k, v] of presence) if (!presenceListed(v, now)) presence.delete(k); }, 30000).unref();
 
 /* ---------- audit log ---------- */
 // Who signed in, who tried and failed, and what an admin changed. One JSON object per line in
@@ -1838,6 +1877,89 @@ const mediaRoutes = {
   }
 };
 
+// A health check that only proves the port answers is the one that lies on the day it matters:
+// a full disk, or a bind mount that came back read-only, leaves every write path in here broken
+// — no sync, no sign-in, no audit line — while the process sits there perfectly alive and the
+// container stays "healthy". So the check writes: one empty file under DATA, removed again.
+// Cheap next to what it proves, and it is the same directory every real write goes to.
+// One probe per window, not one per request: this route is unauthenticated, so a create and an
+// unlink on every call is a disk write anyone who can reach the port may ask for as fast as they
+// like. The container polls every five minutes (api/Dockerfile), so a five-second window is free
+// to the check that matters and caps a flood at one probe per five seconds. The cost is that a
+// poll can be up to five seconds stale — a mount that went read-only a second ago still reads
+// healthy, and the poll after that does not.
+const DATA_PROBE_MS = 5000;
+let dataProbe = { at: 0, ok: false };
+function dataWritable() {
+  const now = Date.now();
+  if (dataProbe.at && now - dataProbe.at < DATA_PROBE_MS) return dataProbe.ok;
+  const probe = path.join(DATA, '.health-' + process.pid);
+  let ok;
+  try {
+    fs.writeFileSync(probe, '');
+    ok = true;
+  } catch (e) {
+    console.error('health: cannot write to', DATA + ':', e.message);
+    ok = false;
+  } finally {
+    try { fs.unlinkSync(probe); } catch { /* never got created */ }
+  }
+  dataProbe = { at: now, ok };
+  return ok;
+}
+
+/** Shared synchronous commit for device sync and scoped MCP workout mutations. */
+function commitProfileState(uid, cur, state, { overRead = true, stamped = false } = {}) {
+  const curRev = cur?._rev || 0;
+  delete state.active;              // in-progress workouts stay device-local
+  // "Reset everything" stamps the profile (`resetAt`, with `resetIds`: what it wiped). The stamp
+  // only moves forward: a write without it, or with an older one — a client from before it, a
+  // backup restored over the profile — keeps the stored stamp. Otherwise every device that saw
+  // the reset would take that copy for one older than the reset, and wipe it again on its next
+  // merge (frontend/src/lib/sync-merge.js).
+  const storedReset = Number(cur?.resetAt) || 0;
+  if (storedReset > (Number(state.resetAt) || 0)) {
+    state.resetAt = cur.resetAt;
+    if (cur.resetIds && typeof cur.resetIds === 'object') state.resetIds = cur.resetIds;
+    else delete state.resetIds;
+  }
+  // The records of removals and edits only grow, and what a writer that does not stamp its own
+  // changes (an older app, an API script) changed is stamped here, so it is neither wiped nor
+  // undone by the next device that merges (sync-stamps.js).
+  // A document nested too deep to compare is the bad request the stringify below refuses too.
+  const report = {};
+  stampPut(cur, state, { overRead: overRead, stamped: stamped, report });
+  state._rev = curRev + 1;          // server-owned; whatever the client sent is ignored
+  // A writer that does not stamp (an older app) takes the revision it is told for the document it
+  // sent, and only reads the profile again once the revision moves. When the server put back
+  // something it left out or set back (sync-stamps.js), the document stored is not that one: it
+  // goes in one revision further, so the writer's next check of the revision (every half minute)
+  // finds it moved and reads it, and its next push over the one it was told is a conflict to merge.
+  if (report.changed) state._rev = curRev + 2;
+  state._wids = [...(Array.isArray(cur?._wids) ? cur._wids : []), ...(cur?._wid ? [cur._wid] : [])]
+    .filter(x => typeof x === 'string').slice(-WID_KEEP);
+  state._wid = crypto.randomBytes(8).toString('hex');
+  // JSON.parse takes any nesting, JSON.stringify recurses and runs out of stack on a document
+  // nested some thousands deep. No client builds one; it is a bad request, not a server error.
+  let text;
+  text = JSON.stringify(state);
+  if (Buffer.byteLength(text) > MAX_BODY) throw new RangeError('State is too large');
+  atomicWrite(stateFile(uid), text);
+  // The stat cache cannot see this write on its own: mtime granularity is 4 ms here (ext4 on
+  // this kernel — 3901 of 3999 back-to-back same-size writes shared one timestamp), and a
+  // `_rev` going from 7 to 8 does not change the file's size, so two writes inside one 4 ms
+  // tick are the same (mtimeMs, size) key. A reader that sampled between them would then serve
+  // the old revision until some later write happened to land on a different tick. This is the
+  // only writer of a state file in the tree, so evicting here is the whole fix.
+  stateCache.delete(uid);
+  // Starts (or stops) the grace clock of every stored file this write stopped (or started)
+  // referencing. Bookkeeping only: the state is already saved, so nothing here may turn a
+  // successful write into an error.
+  if (MEDIA_ON) {
+    try { MEDIA.noteState(uid, state); } catch (e) { console.error('media noteState', e); }
+  }
+  return { rev: curRev + 1, wid: state._wid };
+}
 /* ---------- routes ---------- */
 const nutritionGateway = (req, res) => nutritionProxy(req, res, { readSession, json, readBody });
 const routes = {
@@ -1885,13 +2007,24 @@ const routes = {
   'PUT /api/nutrition/products/{id}': nutritionGateway,
   'DELETE /api/nutrition/products/{id}': nutritionGateway,
   'GET /api/nutrition/diary': nutritionGateway,
+  'GET /api/nutrition/portions': nutritionGateway,
+  'POST /api/nutrition/portions': nutritionGateway,
+  'GET /api/nutrition/portions/{id}': nutritionGateway,
+  'PUT /api/nutrition/portions/{id}': nutritionGateway,
+  'DELETE /api/nutrition/portions/{id}': nutritionGateway,
+  'POST /api/nutrition/portions/{id}/apply': nutritionGateway,
   'POST /api/nutrition/entries': nutritionGateway,
   'GET /api/nutrition/entries/{id}': nutritionGateway,
   'PUT /api/nutrition/entries/{id}': nutritionGateway,
   'DELETE /api/nutrition/entries/{id}': nutritionGateway,
   'GET /api/nutrition/hello': async (req, res) => nutritionHello(req, res, { readSession, json }),
-
-  'GET /api/health': async (req, res) => json(res, 200, { ok: true, users: db.users.length }),
+  // 503 rather than a flag in a 200: the container healthcheck is `wget --spider`, which reads
+  // the status and nothing else, and an instance that cannot write its data directory is exactly
+  // what "unhealthy" is for. The 200 keeps the shape it had, plus the flag it is now asserting.
+  'GET /api/health': async (req, res) => {
+    if (!dataWritable()) return json(res, 503, { ok: false, writable: false });
+    json(res, 200, { ok: true, users: db.users.length, writable: true });
+  },
 
   // Public config the login screen needs before anyone is signed in. `coach` is absent unless
   // the instance has both switched the Coach on and successfully connected a provider — the
@@ -2220,54 +2353,8 @@ const routes = {
         (body.baseRev != null && typeof body.baseWid === 'string' && cur?._wid && body.baseWid !== cur._wid)) {
       return json(res, 409, { error: 'conflict', rev: curRev, state: forClient(cur) });
     }
-    delete body.state.active;              // in-progress workouts stay device-local
-    // "Reset everything" stamps the profile (`resetAt`, with `resetIds`: what it wiped). The stamp
-    // only moves forward: a write without it, or with an older one — a client from before it, a
-    // backup restored over the profile — keeps the stored stamp. Otherwise every device that saw
-    // the reset would take that copy for one older than the reset, and wipe it again on its next
-    // merge (frontend/src/lib/sync-merge.js).
-    const storedReset = Number(cur?.resetAt) || 0;
-    if (storedReset > (Number(body.state.resetAt) || 0)) {
-      body.state.resetAt = cur.resetAt;
-      if (cur.resetIds && typeof cur.resetIds === 'object') body.state.resetIds = cur.resetIds;
-      else delete body.state.resetIds;
-    }
-    // The records of removals and edits only grow, and what a writer that does not stamp its own
-    // changes (an older app, an API script) changed is stamped here, so it is neither wiped nor
-    // undone by the next device that merges (sync-stamps.js).
-    // A document nested too deep to compare is the bad request the stringify below refuses too.
-    const report = {};
-    try { stampPut(cur, body.state, { overRead: body.baseRev != null && body.baseRev === curRev, stamped: body.stamped === true, report }); }
+    try { commitProfileState(user.id, cur, body.state, { overRead: body.baseRev != null && body.baseRev === curRev, stamped: body.stamped === true }); }
     catch (e) { if (e instanceof RangeError) return json(res, 400, { error: 'invalid state' }); throw e; }
-    body.state._rev = curRev + 1;          // server-owned; whatever the client sent is ignored
-    // A writer that does not stamp (an older app) takes the revision it is told for the document it
-    // sent, and only reads the profile again once the revision moves. When the server put back
-    // something it left out or set back (sync-stamps.js), the document stored is not that one: it
-    // goes in one revision further, so the writer's next check of the revision (every half minute)
-    // finds it moved and reads it, and its next push over the one it was told is a conflict to merge.
-    if (report.changed) body.state._rev = curRev + 2;
-    body.state._wids = [...(Array.isArray(cur?._wids) ? cur._wids : []), ...(cur?._wid ? [cur._wid] : [])]
-      .filter(x => typeof x === 'string').slice(-WID_KEEP);
-    body.state._wid = crypto.randomBytes(8).toString('hex');
-    // JSON.parse takes any nesting, JSON.stringify recurses and runs out of stack on a document
-    // nested some thousands deep. No client builds one; it is a bad request, not a server error.
-    let text;
-    try { text = JSON.stringify(body.state); }
-    catch (e) { if (e instanceof RangeError) return json(res, 400, { error: 'invalid state' }); throw e; }
-    atomicWrite(stateFile(user.id), text);
-    // The stat cache cannot see this write on its own: mtime granularity is 4 ms here (ext4 on
-    // this kernel — 3901 of 3999 back-to-back same-size writes shared one timestamp), and a
-    // `_rev` going from 7 to 8 does not change the file's size, so two writes inside one 4 ms
-    // tick are the same (mtimeMs, size) key. A reader that sampled between them would then serve
-    // the old revision until some later write happened to land on a different tick. This is the
-    // only writer of a state file in the tree, so evicting here is the whole fix.
-    stateCache.delete(user.id);
-    // Starts (or stops) the grace clock of every stored file this write stopped (or started)
-    // referencing. Bookkeeping only: the state is already saved, so nothing here may turn a
-    // successful write into an error.
-    if (MEDIA_ON) {
-      try { MEDIA.noteState(user.id, body.state); } catch (e) { console.error('media noteState', e); }
-    }
     json(res, 200, { ok: true, ts: body.state._ts || null, rev: curRev + 1, wid: body.state._wid });
   },
 
@@ -2360,12 +2447,15 @@ const routes = {
     json(res, 200, { ok: true });
   },
 
-  // Live-workout heartbeat: client pings while a workout is on screen; { active:false } drops it.
+  // Live-workout heartbeat: client pings while a workout is on screen; { active:false } drops it,
+  // except with reason `hidden`, which marks it away (see PRESENCE_HIDDEN_GRACE). `navigated`,
+  // `closed`, and no reason at all (older clients), drop it at once.
   'POST /api/activity': async (req, res) => {
     const user = readSession(req);
     if (!user) return json(res, 401, { error: 'not signed in' });
     const body = await readBody(req);
     if (body.active) {
+      // a fresh row, which also clears any hidden mark
       presence.set(user.id, {
         name: text(body.name).slice(0, 60),
         exIdx: +body.exIdx || 0, exTotal: +body.exTotal || 0,
@@ -2373,6 +2463,10 @@ const routes = {
         startedAt: +body.startedAt || Date.now(),
         updatedAt: Date.now()
       });
+    } else if (body.reason === 'hidden') {
+      // The first mark stands: a repeat without a heartbeat between cannot stretch the grace.
+      const p = presence.get(user.id);
+      if (p && p.hiddenAt === undefined) p.hiddenAt = Date.now();
     } else presence.delete(user.id);
     json(res, 200, { ok: true });
   },
@@ -2613,12 +2707,29 @@ async function ensureMcpRuntime() {
 async function startMcpRuntime() {
   const { createMcpOAuth } = await import('./mcp-oauth.js');
   const { createHttpMcp } = await import('../mcp/src/http.js');
+  const { mutateTraining, editableWorkout, workoutKey } = await import('../mcp/src/training.js');
+  const { defaultsShape } = await import('../mcp/src/state.js');
+  const { stampChange } = await import('../frontend/src/lib/sync-merge.js');
   mcpOAuth = createMcpOAuth({ data: DATA, secret: SECRET, origin: ORIGIN, publicUrl: mcpConfiguration.effective.url,
     clients: mcpConfiguration.effective.clients, userById: id => db.users.find(user => user.id === id),
     readSession, json, store: mcpStore || undefined });
   mcpStore = mcpOAuth.store;
   const budget = createWindow({ max: 120, windowMs: 60000 });
   remoteMcp = createHttpMcp({ oauth: mcpOAuth, json, requestNutrition, takeBudget: id => budget.take(id),
+    writeTraining: (id, action, input) => {
+      const current = readStateStrict(id);
+      if (current === UNREADABLE) throw Object.assign(new Error('Training state unreadable'), { code: 'state_unreadable', status: 503 });
+      const state = structuredClone({ ...defaultsShape(), ...current });
+      const result = mutateTraining(state, action, input);
+      if (result.changed) {
+        state._ts = stampChange(current, state);
+        try { commitProfileState(id, current, state, { stamped: true }); }
+        catch (error) { throw Object.assign(error, { code: 'training_save_failed', status: 503, uncertain: true }); }
+      }
+      const workout = state.workouts.find(w => workoutKey(w) === result.workout_id);
+      return result.deleted ? { deleted: true, workout_id: result.workout_id }
+        : editableWorkout(workout, state);
+    },
     readState: id => {
       const state = readStateStrict(id);
       if (state === UNREADABLE) throw Object.assign(new Error('Training state unreadable'), { code: 'state_unreadable', status: 503 });
@@ -2659,7 +2770,9 @@ const server = http.createServer(async (req, res) => {
       && APP_ORIGINS.has(origin);
     res.writeHead(204, {
       'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      // The CF-Access-* pair: a phone's Cloudflare Access service token (frontend lib/cf-access.js),
+      // for an Access application that passes OPTIONS through to the origin.
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, CF-Access-Client-Id, CF-Access-Client-Secret',
       'Access-Control-Max-Age': '86400',
       ...(pna ? { 'Access-Control-Allow-Private-Network': 'true' } : {})
     });

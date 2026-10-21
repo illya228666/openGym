@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWrite } from './durable.js';
 
-export const McpScopes = ['training.read', 'nutrition.read', 'nutrition.write'];
+export const McpScopes = ['training.read', 'training.write', 'nutrition.read', 'nutrition.write'];
 export const MaxDynamicClients = 1000;
 const loopback = url => ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
 const invalid = message => { throw Object.assign(new Error(message), { status: 400 }); };

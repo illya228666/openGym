@@ -13,6 +13,7 @@ public sealed class Product
     public decimal Protein { get; set; }
     public decimal Fat { get; set; }
     public decimal Carbohydrates { get; set; }
+    public decimal? GramsPerPiece { get; set; }
     public bool IsDeleted { get; set; }
     public string? ExternalSource { get; set; }
     public string? ExternalId { get; set; }

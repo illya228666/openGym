@@ -40,6 +40,11 @@ jobs:
             frontend/package-lock.json
             mcp/package-lock.json
       - run: npm ci
+      - name: Validate catalogue, generated data and licensed media dimensions
+        run: |
+          node scripts/catalogue/validate.mjs
+          node scripts/catalogue/build.mjs --check
+          node scripts/catalogue/check-media.mjs
       - run: npm ci --omit=optional
         working-directory: api
       - run: npm ci --ignore-scripts
@@ -144,6 +149,12 @@ jobs:
           docker run -d --name nutrition --network opengym-ci -v opengym-ci-nutrition:/data -e OpenGym__ApiBaseUrl=http://api:3000 -e OpenFoodFacts__BaseUrl=http://off-fixture:5099 -e Nutrition__UsdaBaseUrl=http://off-fixture:5099 -e NO_PROXY=api,nutrition,off-fixture,localhost,127.0.0.1 opengym-nutrition:ci
           docker exec -i api node --input-type=module < scripts/ci/nutrition-internal-smoke.mjs
           node scripts/ci/nutrition-smoke.mjs http://localhost:8080 --verify-persistence
+      - name: Check prefixed nginx routing with the same web image
+        run: |
+          docker run -d --name web-prefixed --network opengym-ci -p 127.0.0.1:8081:80 -e BASE_PATH=/gym opengym-web:ci
+          curl --retry 15 --retry-delay 1 --retry-all-errors --fail http://localhost:8081/gym/api/health
+          curl --fail http://localhost:8081/gym/exercise-media/NOTICE.md | grep -q 'Gym visual'
+          test "$(curl -s -H 'Host: localhost:8080' -o /dev/null -w '%{http_code}' http://localhost:8081/gym/mcp)" = 401
       - name: Verify real Compose deployment, rollback and storage guards on isolated data
         # Production helper is root-owned and reads the Docker volume's host mountpoint.
         run: sudo env "PATH=$PATH" python3 scripts/ci/deploy-storage-smoke.py
@@ -195,7 +206,7 @@ jobs:
       - name: Clean up smoke containers
         if: always()
         run: |
-          docker rm -f web api nutrition off-fixture || true
+          docker rm -f web web-prefixed api nutrition off-fixture || true
           docker volume rm opengym-ci-nutrition || true
           docker network rm opengym-ci || true
 

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- GENERATED FILE - do not edit by hand.
-     Built by scripts/build-api-docs.mjs from api/openapi.yaml (openGym API v1.3.10).
+     Built by scripts/build-api-docs.mjs from api/openapi.yaml (openGym API v1.4.1).
      Regenerate with: node scripts/build-api-docs.mjs -->
 <html lang="en">
 <head>
@@ -13,23 +13,25 @@
 <link rel="preconnect" href="https://stats.duarte-santos.ch">
 <meta property="og:title" content="openGym API reference">
 <meta property="og:description" content="The complete openGym HTTP API as an OpenAPI spec: passkey auth, state sync, push notifications, pairing and admin routes.">
-<meta property="og:image" content="https://opengym.duarte-santos.ch/img/social.jpg">
+<meta property="og:image" content="https://opengym.ch/img/social.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="openGym: your training, your data, your server. Two phones showing the home and workout screens.">
-<meta property="og:url" content="https://opengym.duarte-santos.ch/api.html">
+<meta property="og:url" content="https://opengym.ch/api.html">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="openGym">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="openGym API reference">
-<meta name="twitter:image" content="https://opengym.duarte-santos.ch/img/social.jpg">
-<link rel="canonical" href="https://opengym.duarte-santos.ch/api.html">
-<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-<link rel="icon" type="image/png" sizes="180x180" href="icon-180.png">
+<meta name="twitter:image" content="https://opengym.ch/img/social.jpg">
+<link rel="canonical" href="https://opengym.ch/api.html">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" type="image/png" sizes="96x96" href="/icon-96.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
 <link rel="apple-touch-icon" href="icon-180.png">
-<link rel="stylesheet" href="styles.css?v=23">
+<link rel="stylesheet" href="styles.css?v=26">
 <script>document.documentElement.className += ' js'</script>
-<!-- Umami web analytics for opengym.duarte-santos.ch (self-hosted, cookieless). -->
+<!-- Umami web analytics for opengym.ch (self-hosted, cookieless). -->
 <script defer src="https://stats.duarte-santos.ch/script.js" data-website-id="db36019e-50f4-453c-9c56-d0588aefe233"></script>
 <style>
 /* ------------------------------------------------------------- API reference
@@ -243,8 +245,8 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   </div>
   <p class="api-facts">
     <span>OpenAPI 3.1.0</span>
-    <span>openGym v1.3.10</span>
-    <span>90 endpoints</span>
+    <span>openGym v1.4.1</span>
+    <span>98 endpoints</span>
     <span>AGPL-3.0-or-later</span>
   </p>
 
@@ -845,6 +847,210 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   </div>
 </details>
 
+<details class="ep" id="op-listNutritionPortions">
+  <summary>
+    <span class="m get">GET</span>
+    <span class="ep-path"><code>/api/nutrition/portions</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">List saved standard portions.</span>
+  </summary>
+  <div class="ep-body">
+
+    <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Requires a session: the cookie set at sign-in, or <code>Authorization: Bearer &lt;token&gt;</code> from mobile-app pairing.</span></p>
+
+
+    <p class="ep-h">Responses</p>
+    <div class="ptab">
+  <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">User-owned portions and their ordered ingredients.<span class="r-sig"><a href="#schema-NutritionPortionPage">NutritionPortionPage</a></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">401</span>
+    <span class="p-desc">No session, expired/revoked session, or a disabled account.<span class="r-sig"><code>{&quot;error&quot;:&quot;not signed in&quot;}</code></span></span>
+  </div>
+    </div>
+  </div>
+</details>
+
+<details class="ep" id="op-createNutritionPortion">
+  <summary>
+    <span class="m post">POST</span>
+    <span class="ep-path"><code>/api/nutrition/portions</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">Save a standard portion from personal products.</span>
+  </summary>
+  <div class="ep-body">
+<p>Reuse id and the identical payload after an uncertain write. Product edits affect future applications only.</p>
+    <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Requires a session: the cookie set at sign-in, or <code>Authorization: Bearer &lt;token&gt;</code> from mobile-app pairing.</span></p>
+
+<p class="ep-h">Request body</p><p class="p-desc"><a href="#schema-NutritionPortionCreate">NutritionPortionCreate</a></p>
+    <p class="ep-h">Responses</p>
+    <div class="ptab">
+  <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">Identical create retry.<span class="r-sig"><a href="#schema-NutritionPortion">NutritionPortion</a></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s2">201</span>
+    <span class="p-desc">Portion created.<span class="r-sig"><a href="#schema-NutritionPortion">NutritionPortion</a></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">400</span>
+    <span class="p-desc">Invalid request fields, date, time or numerical precision.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">401</span>
+    <span class="p-desc">No session, expired/revoked session, or a disabled account.<span class="r-sig"><code>{&quot;error&quot;:&quot;not signed in&quot;}</code></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">404</span>
+    <span class="p-desc">Product is unavailable or not owned by this user.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">409</span>
+    <span class="p-desc">Creation id was reused with another payload.</span>
+  </div>
+    </div>
+  </div>
+</details>
+
+<details class="ep" id="op-getNutritionPortion">
+  <summary>
+    <span class="m get">GET</span>
+    <span class="ep-path"><code>/api/nutrition/portions/{id}</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">Read a saved standard portion.</span>
+  </summary>
+  <div class="ep-body">
+
+    <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Requires a session: the cookie set at sign-in, or <code>Authorization: Bearer &lt;token&gt;</code> from mobile-app pairing.</span></p>
+
+
+    <p class="ep-h">Responses</p>
+    <div class="ptab">
+  <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">Portion and current product availability.<span class="r-sig"><a href="#schema-NutritionPortion">NutritionPortion</a></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">401</span>
+    <span class="p-desc">No session, expired/revoked session, or a disabled account.<span class="r-sig"><code>{&quot;error&quot;:&quot;not signed in&quot;}</code></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">404</span>
+    <span class="p-desc">Portion not found for this user.</span>
+  </div>
+    </div>
+  </div>
+</details>
+
+<details class="ep" id="op-updateNutritionPortion">
+  <summary>
+    <span class="m put">PUT</span>
+    <span class="ep-path"><code>/api/nutrition/portions/{id}</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">Replace a portion definition for future applications.</span>
+  </summary>
+  <div class="ep-body">
+
+    <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Requires a session: the cookie set at sign-in, or <code>Authorization: Bearer &lt;token&gt;</code> from mobile-app pairing.</span></p>
+
+<p class="ep-h">Request body</p><p class="p-desc"><a href="#schema-NutritionPortionUpdate">NutritionPortionUpdate</a></p>
+    <p class="ep-h">Responses</p>
+    <div class="ptab">
+  <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">Updated portion.<span class="r-sig"><a href="#schema-NutritionPortion">NutritionPortion</a></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">400</span>
+    <span class="p-desc">Invalid request fields, date, time or numerical precision.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">401</span>
+    <span class="p-desc">No session, expired/revoked session, or a disabled account.<span class="r-sig"><code>{&quot;error&quot;:&quot;not signed in&quot;}</code></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">404</span>
+    <span class="p-desc">Portion or one of its products is unavailable.</span>
+  </div>
+    </div>
+  </div>
+</details>
+
+<details class="ep" id="op-deleteNutritionPortion">
+  <summary>
+    <span class="m delete">DELETE</span>
+    <span class="ep-path"><code>/api/nutrition/portions/{id}</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">Delete a portion definition without changing diary history.</span>
+  </summary>
+  <div class="ep-body">
+
+    <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Requires a session: the cookie set at sign-in, or <code>Authorization: Bearer &lt;token&gt;</code> from mobile-app pairing.</span></p>
+
+
+    <p class="ep-h">Responses</p>
+    <div class="ptab">
+  <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">Deleted.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">401</span>
+    <span class="p-desc">No session, expired/revoked session, or a disabled account.<span class="r-sig"><code>{&quot;error&quot;:&quot;not signed in&quot;}</code></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">404</span>
+    <span class="p-desc">Portion not found for this user.</span>
+  </div>
+    </div>
+  </div>
+</details>
+
+<details class="ep" id="op-applyNutritionPortion">
+  <summary>
+    <span class="m post">POST</span>
+    <span class="ep-path"><code>/api/nutrition/portions/{id}/apply</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">Add all ingredients of a portion as one grouped diary operation.</span>
+  </summary>
+  <div class="ep-body">
+<p>One SaveChanges transaction creates independent, editable diary entries with current product nutrition snapshots. Reuse the same id and identical payload after uncertain writes.</p>
+    <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Requires a session: the cookie set at sign-in, or <code>Authorization: Bearer &lt;token&gt;</code> from mobile-app pairing.</span></p>
+
+<p class="ep-h">Request body</p><p class="p-desc"><a href="#schema-NutritionPortionApplicationInput">NutritionPortionApplicationInput</a></p>
+    <p class="ep-h">Responses</p>
+    <div class="ptab">
+  <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">Identical application retry; current active component rows returned.<span class="r-sig"><a href="#schema-NutritionPortionApplication">NutritionPortionApplication</a></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s2">201</span>
+    <span class="p-desc">Portion application created.<span class="r-sig"><a href="#schema-NutritionPortionApplication">NutritionPortionApplication</a></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">400</span>
+    <span class="p-desc">Invalid request fields, date, time or numerical precision.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">401</span>
+    <span class="p-desc">No session, expired/revoked session, or a disabled account.<span class="r-sig"><code>{&quot;error&quot;:&quot;not signed in&quot;}</code></span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">404</span>
+    <span class="p-desc">Portion or an ingredient product is unavailable. No partial diary entries are created.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">409</span>
+    <span class="p-desc">Application id was reused with another payload.</span>
+  </div>
+    </div>
+  </div>
+</details>
+
 <details class="ep" id="op-createNutritionEntry">
   <summary>
     <span class="m post">POST</span>
@@ -1083,6 +1289,8 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   </summary>
   <div class="ep-body">
 <p>Always public. Also reports how many user accounts exist.</p>
+<p>The check writes: it creates and removes one empty file under <code>DATA_DIR</code>, because a server whose data directory is full or read-only has every write path broken while the port still answers. It is a 503 when that fails — the container healthcheck (<code>wget --spider</code>) reads the status and nothing else.</p>
+<p>The probe runs at most once every five seconds and the answer in between is the last one, so a poll can be that stale. The route is unauthenticated, and one disk write per request is not something to leave open to anyone.</p>
     <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Public: no authentication required.</span></p>
 
 
@@ -1090,7 +1298,11 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <div class="ptab">
   <div class="prow rrow">
     <span class="r-code s2">200</span>
-    <span class="p-desc">The server is up.<span class="r-sig">{ ok: always true, users: integer }</span></span>
+    <span class="p-desc">The server is up and its data directory is writable.<span class="r-sig">{ ok: always true, users: integer, writable: always true }</span></span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s5">503</span>
+    <span class="p-desc">The data directory could not be written — a full disk, or a mount that came back read-only. Nothing that stores anything will work until it is fixed; the reason is in the container log.</span>
   </div>
     </div>
   </div>
@@ -2684,14 +2896,19 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <span class="ep-sum">Live-workout presence heartbeat</span>
   </summary>
   <div class="ep-body">
-<p>The client pings this every ~20 s while a workout is on screen; the admin dashboard reads who is training right now. Purely ephemeral, in-memory, never persisted; entries expire ~70 s after the last ping. <code>{&quot;active&quot;: false}</code> drops the caller's entry immediately.</p>
+<p>The client pings this every ~20 s while a workout is on screen; the admin dashboard reads who is training right now. Purely ephemeral, in-memory, never persisted; entries expire 70 s after the last ping. <code>{&quot;active&quot;: false}</code> is the &quot;left&quot; signal: with <code>reason</code> <code>navigated</code> or <code>closed</code>, or with no reason, it drops the caller's entry immediately. With <code>reason: hidden</code> (the page went to the background) it marks the entry away instead, and the entry stops being listed 45 s after that mark unless a heartbeat arrives first; a heartbeat clears the mark. The 70 s expiry applies either way.</p>
     <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Requires a session: the cookie set at sign-in, or <code>Authorization: Bearer &lt;token&gt;</code> from mobile-app pairing.</span></p>
 
 <p class="ep-h">Request body <span class="p-hint">(JSON)</span></p><div class="ptab">
   <div class="prow">
     <span class="p-name">active</span>
     <span class="p-type">boolean</span>
-    <span class="p-desc">false ends the presence; true (with the fields below) updates it.</span>
+    <span class="p-desc">false ends the presence (see <code>reason</code>); true (with the fields below) updates it.</span>
+  </div>
+  <div class="prow">
+    <span class="p-name">reason</span>
+    <span class="p-type">&quot;navigated&quot; | &quot;closed&quot; | &quot;hidden&quot;</span>
+    <span class="p-desc">Why the client sent <code>active: false</code>: <code>navigated</code> (an in-app route change), <code>closed</code> (the page is going away) or <code>hidden</code> (the page went to the background). <code>navigated</code> and <code>closed</code> drop the entry at once, as no reason does; <code>hidden</code> marks it away rather than dropping it. Ignored with <code>active: true</code>.</span>
   </div>
   <div class="prow">
     <span class="p-name">name</span>
@@ -3897,7 +4114,7 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   </summary>
   <div class="ep-body">
 <p>Checks the runtime, then asks the model for one fixed JSON object and validates the shape that comes back. That is the whole path a job takes, on nobody's profile.</p>
-<p>Always 200: the outcome is in the body, because &quot;the provider refused&quot; is an answer to the question the button asks, not a failure of the request. It brings the two short upstream retry pauses rather than <code>COACH_RETRY_DELAYS_MS</code>, since an admin is watching it through a proxy with a timeout of its own.</p>
+<p>Always 200: the outcome is in the body, because &quot;the provider refused&quot; is an answer to the question the button asks, not a failure of the request. An HTTPS provider gets the same retries as a job: a 429, 500, 502, 503, 504 or 529 is tried twice more, after pauses of 2 and 5 seconds, and only then reported. A runtime provider is asked once.</p>
     <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Admin only: a signed-in session whose user is an admin (<code>ADMIN_UIDS</code> or <code>admin:true</code>), as the session cookie or a Bearer token.</span></p>
 
 
@@ -4150,6 +4367,11 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <span class="p-desc"></span>
   </div>
   <div class="prow">
+    <span class="p-name">gramsPerPiece</span>
+    <span class="p-type">number <span class="p-hint">(&ndash;100000)</span> | null</span>
+    <span class="p-desc">Optional weight of one item; required for piece-based entries.</span>
+  </div>
+  <div class="prow">
     <span class="p-name">id</span>
     <span class="p-type">string <span class="p-hint">(uuid)</span></span>
     <span class="p-desc">POST only: durable creation key for custom products; reuse identical payload on retry.</span>
@@ -4377,11 +4599,6 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
 
 <div class="ptab">
   <div class="prow">
-    <span class="p-name">quantityGrams<em class="p-req" title="required">required</em></span>
-    <span class="p-type">number <span class="p-hint">(&ndash;100000)</span></span>
-    <span class="p-desc"></span>
-  </div>
-  <div class="prow">
     <span class="p-name">date<em class="p-req" title="required">required</em></span>
     <span class="p-type">string <span class="p-hint">(date)</span></span>
     <span class="p-desc">Local date in yyyy-MM-dd format.</span>
@@ -4397,6 +4614,18 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <span class="p-desc">Omit or use null to preserve the snapshot; supply an id to take a fresh snapshot.</span>
   </div>
 </div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionEntryAmount">
+  <summary>
+    <span class="sch-name"><code>NutritionEntryAmount</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum"></span>
+  </summary>
+  <div class="ep-body">
+
+<p class="p-desc">Free-form object.</p>
   </div>
 </details>
 
@@ -4447,6 +4676,21 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <span class="p-desc"></span>
   </div>
   <div class="prow">
+    <span class="p-name">quantity<em class="p-req" title="required">required</em></span>
+    <span class="p-type">number</span>
+    <span class="p-desc">Stored amount in the unit; up to 3 decimal places.</span>
+  </div>
+  <div class="prow">
+    <span class="p-name">unit<em class="p-req" title="required">required</em></span>
+    <span class="p-type">&quot;grams&quot; | &quot;pieces&quot;</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">gramsPerPiece<em class="p-req" title="required">required</em></span>
+    <span class="p-type">number | null</span>
+    <span class="p-desc">Entry snapshot of one-piece weight; never follows later product edits.</span>
+  </div>
+  <div class="prow">
     <span class="p-name">date<em class="p-req" title="required">required</em></span>
     <span class="p-type">string <span class="p-hint">(date)</span></span>
     <span class="p-desc"></span>
@@ -4464,6 +4708,270 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   <div class="prow">
     <span class="p-name">provenance</span>
     <span class="p-type"><a href="#schema-NutritionProvenance">NutritionProvenance</a> | null</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">nutrition<em class="p-req" title="required">required</em></span>
+    <span class="p-type"><a href="#schema-NutritionValues">NutritionValues</a></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">portionGroupId<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string | null <span class="p-hint">(uuid)</span></span>
+    <span class="p-desc">Shared id for entries created from one standard portion.</span>
+  </div>
+  <div class="prow">
+    <span class="p-name">portionName<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string | null</span>
+    <span class="p-desc">Name snapshot from the portion at application time.</span>
+  </div>
+</div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionPortionIngredientInput">
+  <summary>
+    <span class="sch-name"><code>NutritionPortionIngredientInput</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">Piece quantities require a known gramsPerPiece on the selected product.</span>
+  </summary>
+  <div class="ep-body">
+
+<div class="ptab">
+  <div class="prow">
+    <span class="p-name">productId<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(uuid)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">quantity<em class="p-req" title="required">required</em></span>
+    <span class="p-type">number <span class="p-hint">(&ndash;100000)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">unit<em class="p-req" title="required">required</em></span>
+    <span class="p-type">&quot;grams&quot; | &quot;pieces&quot;</span>
+    <span class="p-desc"></span>
+  </div>
+</div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionPortionCreate">
+  <summary>
+    <span class="sch-name"><code>NutritionPortionCreate</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum"></span>
+  </summary>
+  <div class="ep-body">
+
+<div class="ptab">
+  <div class="prow">
+    <span class="p-name">id<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(uuid)</span></span>
+    <span class="p-desc">Stable client creation ID for identical retries.</span>
+  </div>
+  <div class="prow">
+    <span class="p-name">name<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(&le; 200 chars)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">ingredients<em class="p-req" title="required">required</em></span>
+    <span class="p-type"><a href="#schema-NutritionPortionIngredientInput">NutritionPortionIngredientInput</a>[]</span>
+    <span class="p-desc"></span>
+  </div>
+</div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionPortionUpdate">
+  <summary>
+    <span class="sch-name"><code>NutritionPortionUpdate</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum"></span>
+  </summary>
+  <div class="ep-body">
+
+<div class="ptab">
+  <div class="prow">
+    <span class="p-name">name<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(&le; 200 chars)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">ingredients<em class="p-req" title="required">required</em></span>
+    <span class="p-type"><a href="#schema-NutritionPortionIngredientInput">NutritionPortionIngredientInput</a>[]</span>
+    <span class="p-desc"></span>
+  </div>
+</div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionPortionIngredient">
+  <summary>
+    <span class="sch-name"><code>NutritionPortionIngredient</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum"></span>
+  </summary>
+  <div class="ep-body">
+
+<div class="ptab">
+  <div class="prow">
+    <span class="p-name">productId<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(uuid)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">productName<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string</span>
+    <span class="p-desc">Current name when the product is available</span>
+  </div>
+  <div class="prow">
+    <span class="p-name">productBrand<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string | null</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">quantity<em class="p-req" title="required">required</em></span>
+    <span class="p-type">number</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">unit<em class="p-req" title="required">required</em></span>
+    <span class="p-type">&quot;grams&quot; | &quot;pieces&quot;</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">gramsPerPiece<em class="p-req" title="required">required</em></span>
+    <span class="p-type">number | null</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">productAvailable<em class="p-req" title="required">required</em></span>
+    <span class="p-type">boolean</span>
+    <span class="p-desc"></span>
+  </div>
+</div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionPortion">
+  <summary>
+    <span class="sch-name"><code>NutritionPortion</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum"></span>
+  </summary>
+  <div class="ep-body">
+
+<div class="ptab">
+  <div class="prow">
+    <span class="p-name">id<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(uuid)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">name<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">ingredients<em class="p-req" title="required">required</em></span>
+    <span class="p-type"><a href="#schema-NutritionPortionIngredient">NutritionPortionIngredient</a>[]</span>
+    <span class="p-desc"></span>
+  </div>
+</div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionPortionPage">
+  <summary>
+    <span class="sch-name"><code>NutritionPortionPage</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum"></span>
+  </summary>
+  <div class="ep-body">
+
+<div class="ptab">
+  <div class="prow">
+    <span class="p-name">portions<em class="p-req" title="required">required</em></span>
+    <span class="p-type"><a href="#schema-NutritionPortion">NutritionPortion</a>[]</span>
+    <span class="p-desc"></span>
+  </div>
+</div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionPortionApplicationInput">
+  <summary>
+    <span class="sch-name"><code>NutritionPortionApplicationInput</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum"></span>
+  </summary>
+  <div class="ep-body">
+
+<div class="ptab">
+  <div class="prow">
+    <span class="p-name">id<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(uuid)</span></span>
+    <span class="p-desc">Stable application ID for identical retries.</span>
+  </div>
+  <div class="prow">
+    <span class="p-name">multiplier<em class="p-req" title="required">required</em></span>
+    <span class="p-type">number <span class="p-hint">(&ndash;100000, default 1)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">date<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(date)</span></span>
+    <span class="p-desc">Local calendar date in yyyy-MM-dd format.</span>
+  </div>
+  <div class="prow">
+    <span class="p-name">time</span>
+    <span class="p-type">string | null</span>
+    <span class="p-desc"></span>
+  </div>
+</div>
+  </div>
+</details>
+
+<details class="ep sch" id="schema-NutritionPortionApplication">
+  <summary>
+    <span class="sch-name"><code>NutritionPortionApplication</code></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum"></span>
+  </summary>
+  <div class="ep-body">
+
+<div class="ptab">
+  <div class="prow">
+    <span class="p-name">id<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(uuid)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">name<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">multiplier<em class="p-req" title="required">required</em></span>
+    <span class="p-type">number</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">date<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string <span class="p-hint">(date)</span></span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">time<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string | null</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">entries<em class="p-req" title="required">required</em></span>
+    <span class="p-type"><a href="#schema-NutritionEntry">NutritionEntry</a>[]</span>
     <span class="p-desc"></span>
   </div>
   <div class="prow">
@@ -6481,7 +6989,7 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   </div>
 </div></footer>
 
-<script src="site.js?v=23" defer></script>
+<script src="site.js?v=26" defer></script>
 <script>
 /* Jumping to an anchor inside a collapsed card opens the card and re-aligns, since
    the browser scrolled to where the target was while it was still collapsed. */

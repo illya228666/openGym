@@ -26,6 +26,15 @@
 :root[data-theme="light"] .nutrition-fields input{color-scheme:light}
 .nutrition-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px}
 .nutrition-confirm{flex-basis:100%}
+.nutrition-portion-shortcuts{display:flex;flex-direction:column;gap:8px}
+.nutrition-portion-apply{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;background:var(--surface);border-radius:var(--r-sm)}
+.nutrition-portion-apply strong{flex:1;min-width:120px}
+.nutrition-portion-apply input{width:90px;color-scheme:dark}
+:root[data-theme="light"] .nutrition-portion-apply input{color-scheme:light}
+.nutrition-portion-group{padding:14px;background:var(--surface);border-radius:var(--r-sm);margin:10px 0}
+.nutrition-portion-group summary{cursor:pointer;min-height:32px;display:flex;align-items:center}
+.nutrition-portion-ingredients{padding-inline-start:20px}
+.nutrition-portion-ingredients>li{padding:8px 0;border-bottom:var(--hair) solid var(--sep)}
 .nutrition-error{padding:12px;background:var(--surface);border-radius:var(--r-sm)}
 .nutrition-values dt,.nutrition-row p,.nutrition-choice span,.nutrition-picker .field::placeholder{color:color-mix(in srgb,var(--label) 70%,var(--surface))}
 @media(max-width:400px){.nutrition-values{grid-template-columns:repeat(2,minmax(0,1fr))}.nutrition-fields{grid-template-columns:minmax(0,1fr)}.nutrition-row>div:first-child{flex-basis:100%}}

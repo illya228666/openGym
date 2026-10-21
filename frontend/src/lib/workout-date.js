@@ -8,7 +8,7 @@
 // Kept pure and separate from backfill.js (which is about logging a session that never
 // existed) so the date arithmetic and the badge surgery are testable without the UI.
 import { insertChronological, backfillStart } from './backfill.js'
-import { bestWeightForEntry } from './history.js'
+import { bestWeightForEntry, workoutDuration } from './history.js'
 import { beatsWeight } from './exercises.js'
 import { stampWorkout } from './sync-merge.js'
 
@@ -22,7 +22,8 @@ export const legacySyncKey = w => `${w?.d}|${w?.start}`
 // `<input type="time">` wants the wall-clock start in the browser's zone — the same zone
 // backfillStart() writes it in, so this round-trips.
 export const startTimeOf = w => {
-  const d = new Date(w?.start || 0)
+  if (!Number.isFinite(w?.start)) return ''
+  const d = new Date(w.start)
   const pad = n => String(n).padStart(2, '0')
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
@@ -38,9 +39,18 @@ export const sameWorkout = (a, b) => syncKeyOf(a) === syncKeyOf(b)
 // The workout as it is after the move: same session, new position in time. The duration is
 // carried rather than recomputed, so a session that ran 47 minutes still ran 47 minutes.
 export function retimeWorkout(w, iso, time) {
-  const duration = Math.max(0, (w.end ?? w.start) - w.start)
-  const start = backfillStart(iso, time)
-  const moved = { ...w, d: iso, start, end: start + duration }
+  const duration = workoutDuration(w)
+  const moved = { ...w, d: iso }
+  if (time) {
+    moved.start = backfillStart(iso, time)
+    if (duration > 0 || Number.isFinite(w.end)) moved.end = moved.start + duration
+    else delete moved.end
+    delete moved.durationMs
+  } else {
+    delete moved.start; delete moved.end
+    if (duration > 0) moved.durationMs = duration
+    else delete moved.durationMs
+  }
   if (w.id == null) moved.id = legacySyncKey(w)
   return moved
 }
@@ -111,7 +121,8 @@ export const endsInFuture = (iso, time, minutes, now = Date.now()) =>
 
 // How long a saved session ran, in whole minutes — what the duration row starts from. At least a
 // minute, the way a logged past session is at least one (backfillEnd).
-export const durationMinOf = w => Math.max(1, Math.round(Math.max(0, (w?.end ?? w?.start ?? 0) - (w?.start ?? 0)) / 60000))
+export const durationMinOf = w => workoutDuration(w) > 0 ? Math.max(1, Math.round(workoutDuration(w) / 60000))
+  : Number.isFinite(w?.start) && Number.isFinite(w?.end) ? 1 : 0
 
 // The history after a session's length is corrected — the workout nobody ended until they got
 // home, and that now reads three hours. The start stays where it was and the end follows it;
@@ -122,8 +133,11 @@ export function setWorkoutDuration(workouts, ref, minutes, now = Date.now()) {
   const list = Array.isArray(workouts) ? workouts : []
   const current = list.find(w => sameWorkout(w, ref))
   const min = Math.min(MAX_DURATION_MIN, Math.max(1, Math.round(Number(minutes) || 0)))
-  if (!current || !Number.isFinite(current.start) || (current.end != null && min === durationMinOf(current))) return null
+  if (!current || min === durationMinOf(current)) return null
   // A record from before ids is keyed by its day and start, and neither moves here.
-  const edited = stampWorkout({ ...current, end: current.start + min * 60000 }, now)
+  const edited = { ...current }
+  if (Number.isFinite(current.start)) { edited.end = current.start + min * 60000; delete edited.durationMs }
+  else { edited.durationMs = min * 60000; delete edited.end }
+  stampWorkout(edited, now)
   return list.map(w => (w === current ? edited : w))
 }

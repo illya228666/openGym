@@ -10,6 +10,7 @@ import { Section, Row, Button, Switch } from '../components/ui.jsx'
 
 const scopeLabels = {
   'training.read': 'Read training plans and statistics',
+  'training.write': 'Create, edit and delete completed workouts',
   'nutrition.read': 'Read products, diary and nutritional totals',
   'nutrition.write': 'Import products and create, edit and delete food diary entries',
 }

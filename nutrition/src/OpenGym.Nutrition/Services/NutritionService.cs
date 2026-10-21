@@ -58,7 +58,8 @@ public sealed partial class NutritionService(NutritionDbContext db, FoodComposit
         var brand = string.IsNullOrWhiteSpace(request.Brand) ? null : request.Brand.Trim();
         if (string.IsNullOrEmpty(name) || name.Length > 200 || brand?.Length > 100
             || !ValidValue(request.Calories, 1000) || !ValidValue(request.Protein, 100)
-            || !ValidValue(request.Fat, 100) || !ValidValue(request.Carbohydrates, 100)) throw Invalid();
+            || !ValidValue(request.Fat, 100) || !ValidValue(request.Carbohydrates, 100)
+            || !ValidPieceWeight(request.GramsPerPiece)) throw Invalid();
         var product = id.HasValue ? await FindProduct(userId, id.Value, ct) : new Product { UserId = userId, Id = Guid.NewGuid() };
         product.Name = name;
         product.Brand = brand;
@@ -71,6 +72,7 @@ public sealed partial class NutritionService(NutritionDbContext db, FoodComposit
         product.Protein = request.Protein!.Value;
         product.Fat = request.Fat!.Value;
         product.Carbohydrates = request.Carbohydrates!.Value;
+        product.GramsPerPiece = request.GramsPerPiece;
         if (product.ProvenanceJson is not null)
         {
             var provenance = ReadProvenance(product.ProvenanceJson)!;
@@ -147,14 +149,18 @@ public sealed partial class NutritionService(NutritionDbContext db, FoodComposit
         if (request.Id == Guid.Empty || request.ProductId == Guid.Empty) throw Invalid();
         var date = ParseDate(request.Date);
         var time = ParseTime(request.Time);
-        ValidateQuantity(request.QuantityGrams);
-        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            FormattableString.Invariant($"{request.ProductId:D}|{request.QuantityGrams:G29}|{date:yyyy-MM-dd}|{time:HH:mm}"))));
+        var amount = ResolveAmount(request.QuantityGrams, request.Quantity, request.Unit);
+        var fingerprintPayload = request.QuantityGrams.HasValue
+            ? FormattableString.Invariant($"{request.ProductId:D}|{amount.Quantity:G29}|{date:yyyy-MM-dd}|{time:HH:mm}")
+            : FormattableString.Invariant($"{request.ProductId:D}|{amount.Unit}|{amount.Quantity:G29}|{date:yyyy-MM-dd}|{time:HH:mm}");
+        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintPayload)));
         var existing = await db.DiaryEntries.AsNoTracking().SingleOrDefaultAsync(e => e.UserId == userId && e.Id == request.Id, ct);
         if (existing is not null) return Replay(existing, fingerprint);
         var product = await FindProduct(userId, request.ProductId, ct);
-        var entry = new DiaryEntry { Id = request.Id, UserId = userId, QuantityGrams = request.QuantityGrams,
+        var entry = new DiaryEntry { Id = request.Id, UserId = userId, Quantity = amount.Quantity, Unit = amount.Unit,
+            GramsPerPiece = product.GramsPerPiece,
             Date = date, Time = time, CreatedAtUtc = DateTime.UtcNow, CreationFingerprint = fingerprint };
+        _ = EquivalentGrams(entry);
         Snapshot(entry, product);
         db.DiaryEntries.Add(entry);
         try { await db.SaveChangesAsync(ct); }
@@ -173,10 +179,22 @@ public sealed partial class NutritionService(NutritionDbContext db, FoodComposit
     {
         var date = ParseDate(request.Date);
         var time = ParseTime(request.Time);
-        ValidateQuantity(request.QuantityGrams);
+        var amount = ResolveAmount(request.QuantityGrams, request.Quantity, request.Unit);
         var entry = await FindEntry(userId, id, ct);
-        if (request.ProductId.HasValue) Snapshot(entry, await FindProduct(userId, request.ProductId.Value, ct));
-        entry.QuantityGrams = request.QuantityGrams;
+        Product? replacement = request.ProductId.HasValue ? await FindProduct(userId, request.ProductId.Value, ct) : null;
+        if (replacement is not null) Snapshot(entry, replacement);
+        var gramsPerPiece = replacement is null ? entry.GramsPerPiece : replacement.GramsPerPiece;
+        if (amount.Unit == "pieces" && gramsPerPiece is null && replacement is null)
+            gramsPerPiece = (await FindProduct(userId, entry.ProductId, ct)).GramsPerPiece;
+        entry.Quantity = amount.Quantity;
+        entry.Unit = amount.Unit;
+        entry.GramsPerPiece = gramsPerPiece;
+        _ = EquivalentGrams(entry);
+        if (entry.PortionGroupId.HasValue && entry.Date != date)
+        {
+            entry.PortionGroupId = null;
+            entry.PortionName = null;
+        }
         entry.Date = date;
         entry.Time = time;
         await db.SaveChangesAsync(ct);
@@ -224,15 +242,45 @@ public sealed partial class NutritionService(NutritionDbContext db, FoodComposit
             ? provenance with { DataOrigin = "user_provided" } : provenance;
     }
     private static ProductResponse ProductView(Product p) => new(p.Id, p.Name, p.Brand, p.Calories, p.Protein, p.Fat, p.Carbohydrates,
-        p.ExternalSource, p.ExternalId, p.Barcode, p.PackageQuantity, p.SourceUrl, p.NutritionSource, p.RetrievedAtUtc, p.SourceFingerprint, ReadProvenance(p.ProvenanceJson));
+        p.ExternalSource, p.ExternalId, p.Barcode, p.PackageQuantity, p.SourceUrl, p.NutritionSource, p.RetrievedAtUtc,
+        p.SourceFingerprint, ReadProvenance(p.ProvenanceJson), p.GramsPerPiece);
     private static EntryResponse EntryView(DiaryEntry e)
     {
         var per100 = new Nutrients(e.Calories, e.Protein, e.Fat, e.Carbohydrates);
-        return new(e.Id, e.ProductId, e.Name, e.Brand, e.QuantityGrams, e.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            e.Time?.ToString("HH:mm", CultureInfo.InvariantCulture), per100, NutritionCalculator.ForQuantity(per100, e.QuantityGrams), ReadProvenance(e.ProvenanceJson));
+        var grams = EquivalentGrams(e);
+        return new(e.Id, e.ProductId, e.Name, e.Brand, grams, e.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            e.Time?.ToString("HH:mm", CultureInfo.InvariantCulture), per100, NutritionCalculator.ForQuantity(per100, grams),
+            ReadProvenance(e.ProvenanceJson), e.Quantity, e.Unit, e.GramsPerPiece, e.PortionGroupId, e.PortionName);
+    }
+
+    private static (decimal Quantity, string Unit) ResolveAmount(decimal? quantityGrams, decimal? quantity, string? unit)
+    {
+        var hasNewAmount = quantity.HasValue || unit is not null;
+        if (quantityGrams.HasValue == hasNewAmount) throw Invalid();
+        if (quantityGrams.HasValue)
+        {
+            ValidateQuantity(quantityGrams.Value);
+            return (quantityGrams.Value, "grams");
+        }
+        if (quantity is null || unit is not ("grams" or "pieces")) throw Invalid();
+        ValidateQuantity(quantity.Value);
+        return (quantity.Value, unit);
+    }
+
+    private static decimal EquivalentGrams(DiaryEntry entry)
+    {
+        var grams = entry.Unit switch
+        {
+            "grams" => entry.Quantity,
+            "pieces" when entry.GramsPerPiece is > 0 => entry.Quantity * entry.GramsPerPiece.Value,
+            _ => throw Invalid()
+        };
+        if (grams > 100000 || decimal.Round(grams, 6) != grams) throw Invalid();
+        return grams;
     }
 
     private static bool ValidValue(decimal? value, decimal max) => value is >= 0 && value <= max && decimal.Round(value.Value, 3) == value;
+    private static bool ValidPieceWeight(decimal? value) => value is null || value is > 0 and <= 100000 && decimal.Round(value.Value, 3) == value;
     private static void ValidateQuantity(decimal value)
     {
         if (value <= 0 || value > 100000 || decimal.Round(value, 3) != value) throw Invalid();

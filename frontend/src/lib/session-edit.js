@@ -201,6 +201,9 @@ function draftRecord(active, current, key) {
     return merged
   })
   const record = { ...current, ...updated, id: key, d: current.d, start: current.start, end: current.end }
+  // Missing clocks stay absent when editing MCP/imported date-only history.
+  if (!Number.isFinite(current.start)) delete record.start
+  if (!Number.isFinite(current.end)) delete record.end
   if (!('excludeFromProgression' in updated)) delete record.excludeFromProgression
   const base = active.editBase
   for (const k of SESSION_FIELDS) {

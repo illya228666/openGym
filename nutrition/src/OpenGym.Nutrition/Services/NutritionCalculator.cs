@@ -7,7 +7,7 @@ public static class NutritionCalculator
 {
     public static Nutrients ForQuantity(Nutrients per100Grams, decimal quantityGrams)
     {
-        if (quantityGrams <= 0 || quantityGrams > 100000 || decimal.Round(quantityGrams, 3) != quantityGrams)
+        if (quantityGrams <= 0 || quantityGrams > 100000 || decimal.Round(quantityGrams, 6) != quantityGrams)
             throw new ArgumentOutOfRangeException(nameof(quantityGrams));
         var factor = quantityGrams / 100m;
         return new(per100Grams.Calories * factor, per100Grams.Protein * factor,

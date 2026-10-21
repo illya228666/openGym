@@ -7,6 +7,18 @@ const target = new URL(base)
 assert.ok(process.argv.includes('--disposable') && target.protocol === 'http:' &&
   ['localhost', '127.0.0.1'].includes(target.hostname), 'Explicit --disposable and a loopback HTTP stack are required')
 const call = (path, options = {}) => fetch(base + path, { ...options, redirect: 'manual', signal: AbortSignal.timeout(15000) })
+// Exercise media are baked into web, never fetched from a dataset at container startup.
+for (const [path, mime] of [['still/0025.webp', 'image/webp'], ['clip/0025.mp4', 'video/mp4']]) {
+  const response = await call('/exercise-media/' + path, { headers: { Range: 'bytes=0-0' } })
+  assert.equal(response.status, 206)
+  assert.match(response.headers.get('content-type'), new RegExp('^' + mime))
+  assert.equal(response.headers.get('cross-origin-resource-policy'), 'same-origin')
+  assert.match(response.headers.get('cache-control'), /immutable/)
+  await response.body.cancel()
+}
+const notice = await call('/exercise-media/NOTICE.md')
+assert.equal(notice.status, 200)
+assert.match(await notice.text(), /Gym visual/)
 // The disposable stack creates its administrator first (before Nutrition account smoke).
 const adminName = 'MCP admin ' + crypto.randomUUID().slice(0, 8)
 const password = 'MCP River stone garden 734!'
@@ -28,7 +40,7 @@ assert.equal((await call('/mcp')).status, 404)
 await toggle(true)
 const initialChallenge = await call('/mcp')
 assert.equal(initialChallenge.status, 401)
-assert.match(initialChallenge.headers.get('www-authenticate'), /scope="training.read nutrition.read nutrition.write"/)
+assert.match(initialChallenge.headers.get('www-authenticate'), /scope="training.read training.write nutrition.read nutrition.write"/)
 const name = 'MCP CI ' + crypto.randomUUID().slice(0, 8)
 let cookie = await registerAccount(name)
 // Exercise existing OpenGym password sign-in, not a manufactured session.
@@ -97,7 +109,7 @@ async function authorize(scope) {
   assert.equal(exchange.status, 200)
   return (await exchange.json()).access_token
 }
-const token = await authorize('training.read nutrition.read nutrition.write offline_access')
+const token = await authorize('training.read training.write nutrition.read nutrition.write offline_access')
 const rpc = async (method, params, expected = 200, accessToken = token) => {
   const result = await call('/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Authorization: 'Bearer ' + accessToken },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })
@@ -111,13 +123,38 @@ const tool = async (name, args, error) => {
   if (error) assert.equal(envelope.result.structuredContent.code, error)
   return envelope.result.structuredContent
 }
-assert.equal((await rpc('tools/list', {})).result.tools.length, 21)
+assert.equal((await rpc('tools/list', {})).result.tools.length, 25)
 await toggle(false)
 await rpc('tools/list', {}, 404)
 assert.equal((await call('/oauth/token')).status, 404)
 assert.equal((await call('/api/me', { headers: { Cookie: cookie } })).status, 200)
 await toggle(true)
-assert.equal((await rpc('tools/list', {})).result.tools.length, 21)
+assert.equal((await rpc('tools/list', {})).result.tools.length, 25)
+// One completed-workout lifecycle through real OAuth, shared calculations and durable sync.
+const workoutArgs = { workout_id: crypto.randomUUID(), unit: 'kg', date: '2026-10-19',
+  entries: [{ exercise_id: '0025', sets: [{ w: 60, r: 8 }, { w: 60, r: 8 }] }] }
+const workout = await tool('create_workout', workoutArgs)
+assert.equal(workout.start_time, null)
+assert.equal(workout.duration_minutes, null)
+assert.deepEqual(await tool('create_workout', workoutArgs), workout)
+let logged = await tool('get_workout', { workout_id: workout.workout_id })
+assert.equal(logged.volume, 960)
+const workoutEdit = { workout_id: workout.workout_id, unit: 'kg', expected_version: logged.editing.version,
+  operation_id: crypto.randomUUID(), note: 'MCP workout smoke', duration_minutes: 42,
+  entries: [{ entry_id: workout.entries[0].entry_id, sets: [{ set_id: workout.entries[0].sets[0].set_id, w: 62.5 }] }] }
+const corrected = await tool('update_workout', workoutEdit)
+assert.deepEqual(await tool('update_workout', workoutEdit), corrected)
+logged = await tool('get_workout', { workout_id: workout.workout_id })
+assert.equal(logged.volume, 980)
+assert.equal(logged.editing.note, 'MCP workout smoke')
+assert.equal(logged.editing.duration_minutes, 42)
+await tool('update_workout', { ...workoutEdit, operation_id: crypto.randomUUID() }, 'version_conflict')
+const legacyTrainingToken = await authorize('training.read')
+const deniedTraining = await rpc('tools/call', { name: 'create_workout', arguments: { ...workoutArgs, workout_id: crypto.randomUUID() } }, 200, legacyTrainingToken)
+assert.equal(deniedTraining.result.structuredContent.code, 'insufficient_scope')
+await tool('delete_workout', { workout_id: workout.workout_id, unit: 'kg', expected_version: corrected.version,
+  operation_id: crypto.randomUUID(), confirmed: true })
+await tool('create_workout', workoutArgs, 'workout_deleted')
 assert.equal((await tool('nutrition_search_products', {})).products.length, 0)
 if (process.argv.includes('--offline-estimates')) {
   await tool('nutrition_search_reference_foods', { search: 'chicken breast' }, 'source_unavailable')
@@ -229,7 +266,7 @@ assert.equal(allowed.result.structuredContent.canImport, true)
 const connectionsResponse = await call('/api/mcp/connections', { headers: { Cookie: cookie } })
 assert.equal(connectionsResponse.status, 200)
 const connections = await connectionsResponse.json()
-assert.equal(connections.connections.length, 2)
+assert.equal(connections.connections.length, 3)
 await toggle(false)
 for (const connection of connections.connections) {
   const revoke = await call('/api/mcp/connections/revoke', { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' },

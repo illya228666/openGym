@@ -90,4 +90,21 @@ describe('check-locales.mjs', () => {
     expect(r.stdout + r.stderr).toContain('in sync')
     expect(r.status).toBe(0)
   })
+
+  it('allows only the known fork strings to fall back in the new Bengali pack', () => {
+    const packs = { de: { Save: 'Speichern', Nutrition: 'Ernährung' },
+      ru: { Save: 'Сохранить', Nutrition: 'Питание' }, fr: { Save: 'Enregistrer', Nutrition: 'Nutrition' },
+      es: { Save: 'Guardar', Nutrition: 'Nutrición' },
+      bn: { Save: 'সংরক্ষণ' } }
+    expect(run(packs).code).toBe(0)
+    const missingShared = run({ ...packs, bn: {} })
+    expect(missingShared.code).toBe(1)
+    expect(missingShared.out).toContain('"Save"')
+    const existingPack = run({ ...packs, fr: { Save: 'Enregistrer' } })
+    expect(existingPack.code).toBe(1)
+    expect(existingPack.out).toContain('"Nutrition"')
+    const blank = run({ ...packs, bn: { Save: 'সংরক্ষণ', Nutrition: '' } })
+    expect(blank.code).toBe(1)
+    expect(blank.out).toContain('blank')
+  })
 })

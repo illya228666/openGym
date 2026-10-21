@@ -45,6 +45,30 @@ public static class NutritionEndpoints
         });
         api.MapGet("/diary", (ClaimsPrincipal user, NutritionService service, string? date, CancellationToken ct) =>
             service.Diary(UserId(user), date, ct));
+        api.MapGet("/portions", (ClaimsPrincipal user, NutritionService service, CancellationToken ct) =>
+            service.Portions(UserId(user), ct));
+        api.MapGet("/portions/{id:guid}", (ClaimsPrincipal user, NutritionService service, Guid id, CancellationToken ct) =>
+            service.Portion(UserId(user), id, ct));
+        api.MapPost("/portions", async (ClaimsPrincipal user, NutritionService service, CreatePortionRequest request, CancellationToken ct) =>
+        {
+            var result = await service.CreatePortion(UserId(user), request, ct);
+            return result.Created ? Results.Created($"/api/nutrition/portions/{result.Portion.Id}", result.Portion)
+                : Results.Ok(result.Portion);
+        });
+        api.MapPut("/portions/{id:guid}", (ClaimsPrincipal user, NutritionService service, Guid id,
+            UpdatePortionRequest request, CancellationToken ct) => service.UpdatePortion(UserId(user), id, request, ct));
+        api.MapDelete("/portions/{id:guid}", async (ClaimsPrincipal user, NutritionService service, Guid id, CancellationToken ct) =>
+        {
+            await service.DeletePortion(UserId(user), id, ct);
+            return Results.Ok(new { ok = true });
+        });
+        api.MapPost("/portions/{id:guid}/apply", async (ClaimsPrincipal user, NutritionService service, Guid id,
+            PortionApplicationRequest request, CancellationToken ct) =>
+        {
+            var result = await service.ApplyPortion(UserId(user), id, request, ct);
+            return result.Created ? Results.Created($"/api/nutrition/diary?date={result.Application.Date}", result.Application)
+                : Results.Ok(result.Application);
+        });
         api.MapGet("/entries/{id:guid}", (ClaimsPrincipal user, NutritionService service, Guid id, CancellationToken ct) =>
             service.Entry(UserId(user), id, ct));
         api.MapPost("/entries", async (ClaimsPrincipal user, NutritionService service, CreateEntryRequest request, CancellationToken ct) =>

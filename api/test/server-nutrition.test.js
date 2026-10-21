@@ -94,7 +94,7 @@ test('Nutrition gateway preserves Node session rules and forwards only credentia
   assert.equal(calls.at(-1).headers['x-user-id'], undefined);
   await fetch(base + '/api/nutrition/diary?date=2026-10-13&userId=admin', { headers: auth });
   assert.equal(calls.at(-1).url, '/api/nutrition/diary?date=2026-10-13');
-  for (const [method, route] of [['POST', 'products'], ['POST', 'entries'], ['PUT', 'products/' + id],
+  for (const [method, route] of [['POST', 'products'], ['POST', 'entries'], ['POST', 'portions'], ['GET', 'portions'], ['PUT', 'products/' + id],
     ['PUT', 'entries/' + id], ['DELETE', 'products/' + id], ['DELETE', 'entries/' + id], ['GET', 'entries/' + id]]) {
     const payload = { id, productId: id, quantityGrams: 125, date: '2026-10-13', time: null };
     reply = { status: method === 'POST' ? 201 : 200, body: { id } };
@@ -105,6 +105,12 @@ test('Nutrition gateway preserves Node session rules and forwards only credentia
     assert.equal(calls.at(-1).method, method);
     assert.equal(calls.at(-1).url, '/api/nutrition/' + route);
     if (['POST', 'PUT'].includes(method)) assert.deepEqual(JSON.parse(calls.at(-1).body), payload);
+  }
+  for (const [method, route] of [['GET', 'portions/' + id], ['PUT', 'portions/' + id], ['DELETE', 'portions/' + id], ['POST', 'portions/' + id + '/apply']]) {
+    reply = { status: method === 'POST' ? 201 : 200, body: { id } };
+    response = await fetch(base + '/api/nutrition/' + route, { method, headers: auth, ...(method === 'POST' || method === 'PUT' ? { body: JSON.stringify({ id }) } : {}) });
+    assert.equal(response.status, reply.status);
+    assert.equal(calls.at(-1).url, '/api/nutrition/' + route);
   }
   const before = calls.length;
   assert.equal((await fetch(base + '/api/nutrition/entries', { method: 'POST', headers: { Cookie: `__Host-gymsid=${token}`, Origin: 'https://evil.example', 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
